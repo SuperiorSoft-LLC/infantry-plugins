@@ -71,6 +71,25 @@
                     "notes": null,
                     "yanked": false,
                     "yankedReason": null
+                },
+                {
+                    "version": "1.2.1",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "speech.out"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.1/Infantry_ReadAloud.ihq",
+                    "size": 32070,
+                    "sha256": "08b46b797aa8620bac67debaed3f5b3e24da94105eb40bdeddb6e963a1667983",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
                 }
             ],
             "repo": "SuperiorSoft-LLC/infantry-plugins",
