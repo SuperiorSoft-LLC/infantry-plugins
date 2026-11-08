@@ -69,6 +69,18 @@
       "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.2/Infantry_ReadAloud.ihq",
       "size": 32730,
       "sha256": "0ee602231d2b027eb2303a787bfcaaa5c88b8b61f5b4e96e16c71de0aa4279bb"
+    },
+    {
+      "version": "1.2.3",
+      "api": {
+        "plugin": ">=2"
+      },
+      "grants": [
+        "speech.out"
+      ],
+      "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.3/Infantry_ReadAloud.ihq",
+      "size": 36046,
+      "sha256": "b6b3782cdeeaadbf02554c5f236129a39a350968723e783f2c576cbab0c81e1e"
     }
   ]
 }
