@@ -29,6 +29,14 @@
       "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_Mascot-v1.0.2/Infantry_Mascot.ihq",
       "size": 177153,
       "sha256": "723d1180448a674798f1aa519bd355d71f0047f67ad812ff4b32b86deddef76b"
+    },
+    {
+      "version": "1.0.3",
+      "api": { "plugin": ">=2" },
+      "grants": [],
+      "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_Mascot-v1.0.3/Infantry_Mascot.ihq",
+      "size": 180017,
+      "sha256": "aa5590c34a5f135d4ac5fe06b56e12d100230b38168a863f0f5ff3d951f125c4"
     }
   ]
 }
