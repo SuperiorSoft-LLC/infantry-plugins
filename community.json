@@ -1,173 +1,205 @@
 {
-  "schema": 1,
-  "id": "infantry-community",
-  "class": "community",
-  "generated": "2026-11-08T04:29:22Z",
-  "plugins": [
-    {
-      "id": "Infantry_ReadAloud",
-      "description": "Read chat messages aloud with the host's local voice.",
-      "tags": [
-        "voice",
-        "speech",
-        "chat"
-      ],
-      "license": "Apache-2.0",
-      "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
-      "versions": [
+    "schema": 1,
+    "id": "infantry-community",
+    "class": "community",
+    "generated": "2026-11-09T02:44:48Z",
+    "plugins": [
         {
-          "version": "1.1.0",
-          "api": {
-            "plugin": ">=2",
-            "daemon": null,
-            "harness": null
-          },
-          "grants": [
-            "speech.out"
-          ],
-          "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.1.0/Infantry_ReadAloud.ihq",
-          "size": 26974,
-          "sha256": "bbed489c5334fa6d5be5acb465d4f173f1e47573a2e2d53e634ec253901c0646",
-          "signer": null,
-          "published": null,
-          "notes": null,
-          "yanked": false,
-          "yankedReason": null
+            "id": "Infantry_Mascot",
+            "description": "Mascot avatars: a selectable avatar style that draws each agent as a small living character whose pose follows the session state. The role portrait stays the default.",
+            "tags": [
+                "avatar",
+                "agent",
+                "appearance"
+            ],
+            "license": "Apache-2.0",
+            "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
+            "versions": [
+                {
+                    "version": "1.0.0",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_Mascot-v1.0.0/Infantry_Mascot.ihq",
+                    "size": 177586,
+                    "sha256": "81c7681b467458792f803309083621dae84709420d98c5874f03e77e60b94dcc",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                }
+            ],
+            "repo": "SuperiorSoft-LLC/infantry-plugins",
+            "name": null
         },
         {
-          "version": "1.1.1",
-          "api": {
-            "plugin": ">=2",
-            "daemon": null,
-            "harness": null
-          },
-          "grants": [
-            "speech.out"
-          ],
-          "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.1.1/Infantry_ReadAloud.ihq",
-          "size": 29682,
-          "sha256": "63330676d40b239015dadebe7beb850a69154ea03831189294bbb824c05c1ab1",
-          "signer": null,
-          "published": null,
-          "notes": null,
-          "yanked": false,
-          "yankedReason": null
+            "id": "Infantry_ReadAloud",
+            "description": "Read chat messages aloud with the host's local voice.",
+            "tags": [
+                "voice",
+                "speech",
+                "chat"
+            ],
+            "license": "Apache-2.0",
+            "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
+            "versions": [
+                {
+                    "version": "1.1.0",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "speech.out"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.1.0/Infantry_ReadAloud.ihq",
+                    "size": 26974,
+                    "sha256": "bbed489c5334fa6d5be5acb465d4f173f1e47573a2e2d53e634ec253901c0646",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                },
+                {
+                    "version": "1.1.1",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "speech.out"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.1.1/Infantry_ReadAloud.ihq",
+                    "size": 29682,
+                    "sha256": "63330676d40b239015dadebe7beb850a69154ea03831189294bbb824c05c1ab1",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                },
+                {
+                    "version": "1.2.0",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "speech.out"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.0/Infantry_ReadAloud.ihq",
+                    "size": 33526,
+                    "sha256": "5d1c62e882d96ee04cfdcc219b467848103564338b11f85b7bb6bdf3bf230b1e",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                },
+                {
+                    "version": "1.2.1",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "speech.out"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.1/Infantry_ReadAloud.ihq",
+                    "size": 32070,
+                    "sha256": "08b46b797aa8620bac67debaed3f5b3e24da94105eb40bdeddb6e963a1667983",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                },
+                {
+                    "version": "1.2.2",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "speech.out"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.2/Infantry_ReadAloud.ihq",
+                    "size": 32730,
+                    "sha256": "0ee602231d2b027eb2303a787bfcaaa5c88b8b61f5b4e96e16c71de0aa4279bb",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                },
+                {
+                    "version": "1.2.3",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "speech.out"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.3/Infantry_ReadAloud.ihq",
+                    "size": 36046,
+                    "sha256": "b6b3782cdeeaadbf02554c5f236129a39a350968723e783f2c576cbab0c81e1e",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                }
+            ],
+            "repo": "SuperiorSoft-LLC/infantry-plugins",
+            "name": null
         },
         {
-          "version": "1.2.0",
-          "api": {
-            "plugin": ">=2",
-            "daemon": null,
-            "harness": null
-          },
-          "grants": [
-            "speech.out"
-          ],
-          "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.0/Infantry_ReadAloud.ihq",
-          "size": 33526,
-          "sha256": "5d1c62e882d96ee04cfdcc219b467848103564338b11f85b7bb6bdf3bf230b1e",
-          "signer": null,
-          "published": null,
-          "notes": null,
-          "yanked": false,
-          "yankedReason": null
-        },
-        {
-          "version": "1.2.1",
-          "api": {
-            "plugin": ">=2",
-            "daemon": null,
-            "harness": null
-          },
-          "grants": [
-            "speech.out"
-          ],
-          "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.1/Infantry_ReadAloud.ihq",
-          "size": 32070,
-          "sha256": "08b46b797aa8620bac67debaed3f5b3e24da94105eb40bdeddb6e963a1667983",
-          "signer": null,
-          "published": null,
-          "notes": null,
-          "yanked": false,
-          "yankedReason": null
-        },
-        {
-          "version": "1.2.2",
-          "api": {
-            "plugin": ">=2",
-            "daemon": null,
-            "harness": null
-          },
-          "grants": [
-            "speech.out"
-          ],
-          "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.2/Infantry_ReadAloud.ihq",
-          "size": 32730,
-          "sha256": "0ee602231d2b027eb2303a787bfcaaa5c88b8b61f5b4e96e16c71de0aa4279bb",
-          "signer": null,
-          "published": null,
-          "notes": null,
-          "yanked": false,
-          "yankedReason": null
-        },
-        {
-          "version": "1.2.3",
-          "api": {
-            "plugin": ">=2",
-            "daemon": null,
-            "harness": null
-          },
-          "grants": [
-            "speech.out"
-          ],
-          "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_ReadAloud-v1.2.3/Infantry_ReadAloud.ihq",
-          "size": 36046,
-          "sha256": "b6b3782cdeeaadbf02554c5f236129a39a350968723e783f2c576cbab0c81e1e",
-          "signer": null,
-          "published": null,
-          "notes": null,
-          "yanked": false,
-          "yankedReason": null
+            "id": "Infantry_VoiceInput",
+            "description": "Dictate into the chat composer with the microphone.",
+            "tags": [
+                "voice",
+                "speech",
+                "chat"
+            ],
+            "license": "Apache-2.0",
+            "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
+            "versions": [
+                {
+                    "version": "1.0.0",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "audio.in",
+                        "events"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_VoiceInput-v1.0.0/Infantry_VoiceInput.ihq",
+                    "size": 102981,
+                    "sha256": "66b54a8d3c1a9571d31ef84895a872863b31ff6fed8dda16b880ba94aa02127b",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                }
+            ],
+            "repo": "SuperiorSoft-LLC/infantry-plugins",
+            "name": null
         }
-      ],
-      "repo": "SuperiorSoft-LLC/infantry-plugins",
-      "name": null
-    },
-    {
-      "id": "Infantry_VoiceInput",
-      "description": "Dictate into the chat composer with the microphone.",
-      "tags": [
-        "voice",
-        "speech",
-        "chat"
-      ],
-      "license": "Apache-2.0",
-      "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
-      "versions": [
-        {
-          "version": "1.0.0",
-          "api": {
-            "plugin": ">=2",
-            "daemon": null,
-            "harness": null
-          },
-          "grants": [
-            "audio.in",
-            "events"
-          ],
-          "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_VoiceInput-v1.0.0/Infantry_VoiceInput.ihq",
-          "size": 102981,
-          "sha256": "66b54a8d3c1a9571d31ef84895a872863b31ff6fed8dda16b880ba94aa02127b",
-          "signer": null,
-          "published": null,
-          "notes": null,
-          "yanked": false,
-          "yankedReason": null
-        }
-      ],
-      "repo": "SuperiorSoft-LLC/infantry-plugins",
-      "name": null
-    }
-  ],
-  "name": null
+    ],
+    "name": null
 }
