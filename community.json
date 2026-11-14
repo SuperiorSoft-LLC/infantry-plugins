@@ -268,7 +268,9 @@
                     "api": {
                         "plugin": ">=2"
                     },
-                    "grants": [],
+                    "grants": [
+                        "daemon.code"
+                    ],
                     "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_News-v1.0.0/Infantry_News.ihq",
                     "size": 64934,
                     "sha256": "5b4f327bfb9ff704152c75729eb742c03b2243ca82a95c218c39ebab1ec7b37a"
