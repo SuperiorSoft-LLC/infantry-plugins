@@ -1,18 +1,38 @@
 {
   "id": "Infantry_News",
   "description": "News headlines for every agent: the news.headlines capability (Google News RSS, no key), the card:news chat card and the News Agent role.",
-  "tags": ["news","agent","chat"],
+  "tags": [
+    "news",
+    "agent",
+    "chat"
+  ],
   "license": "Apache-2.0",
   "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
   "repo": "SuperiorSoft-LLC/infantry-plugins",
   "versions": [
     {
       "version": "1.0.0",
-      "api": { "plugin": ">=2" },
-      "grants": ["daemon.code"],
+      "api": {
+        "plugin": ">=2"
+      },
+      "grants": [
+        "daemon.code"
+      ],
       "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_News-v1.0.0/Infantry_News.ihq",
       "size": 64934,
       "sha256": "5b4f327bfb9ff704152c75729eb742c03b2243ca82a95c218c39ebab1ec7b37a"
+    },
+    {
+      "version": "1.0.1",
+      "api": {
+        "plugin": ">=2"
+      },
+      "grants": [
+        "daemon.code"
+      ],
+      "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_News-v1.0.1/Infantry_News.ihq",
+      "size": 64866,
+      "sha256": "da2e0d3438c25ce4d195ff76b43bd3d0eb04b9f8ce93b1bfb90e88dba8d12d3d"
     }
   ]
 }
