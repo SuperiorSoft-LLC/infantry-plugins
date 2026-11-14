@@ -2,7 +2,7 @@
     "schema": 1,
     "id": "infantry-community",
     "class": "community",
-    "generated": "2026-11-14T00:25:00Z",
+    "generated": "2026-11-14T02:24:39Z",
     "plugins": [
         {
             "id": "Infantry_Mascot",
@@ -77,6 +77,59 @@
                     "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_Mascot-v1.0.3/Infantry_Mascot.ihq",
                     "size": 180017,
                     "sha256": "aa5590c34a5f135d4ac5fe06b56e12d100230b38168a863f0f5ff3d951f125c4",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                }
+            ],
+            "repo": "SuperiorSoft-LLC/infantry-plugins",
+            "name": null
+        },
+        {
+            "id": "Infantry_News",
+            "description": "News headlines for every agent: the news.headlines capability (Google News RSS, no key), the card:news chat card and the News Agent role.",
+            "tags": [
+                "news",
+                "agent",
+                "chat"
+            ],
+            "license": "Apache-2.0",
+            "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
+            "versions": [
+                {
+                    "version": "1.0.0",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "daemon.code"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_News-v1.0.0/Infantry_News.ihq",
+                    "size": 64934,
+                    "sha256": "5b4f327bfb9ff704152c75729eb742c03b2243ca82a95c218c39ebab1ec7b37a",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                },
+                {
+                    "version": "1.0.1",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": null,
+                        "harness": null
+                    },
+                    "grants": [
+                        "daemon.code"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_News-v1.0.1/Infantry_News.ihq",
+                    "size": 64866,
+                    "sha256": "da2e0d3438c25ce4d195ff76b43bd3d0eb04b9f8ce93b1bfb90e88dba8d12d3d",
                     "signer": null,
                     "published": null,
                     "notes": null,
@@ -250,32 +303,6 @@
             ],
             "repo": "SuperiorSoft-LLC/infantry-plugins",
             "name": null
-        },
-        {
-            "id": "Infantry_News",
-            "description": "News headlines for every agent: the news.headlines capability (Google News RSS, no key), the card:news chat card and the News Agent role.",
-            "tags": [
-                "news",
-                "agent",
-                "chat"
-            ],
-            "license": "Apache-2.0",
-            "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
-            "repo": "SuperiorSoft-LLC/infantry-plugins",
-            "versions": [
-                {
-                    "version": "1.0.0",
-                    "api": {
-                        "plugin": ">=2"
-                    },
-                    "grants": [
-                        "daemon.code"
-                    ],
-                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_News-v1.0.0/Infantry_News.ihq",
-                    "size": 64934,
-                    "sha256": "5b4f327bfb9ff704152c75729eb742c03b2243ca82a95c218c39ebab1ec7b37a"
-                }
-            ]
         }
     ],
     "name": null
