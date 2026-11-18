@@ -2,7 +2,7 @@
     "schema": 1,
     "id": "infantry-community",
     "class": "community",
-    "generated": "2026-11-18T01:26:46Z",
+    "generated": "2026-11-18T03:10:10Z",
     "plugins": [
         {
             "id": "Infantry_Calendar",
@@ -33,6 +33,31 @@
                     "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_Calendar-v1.0.1/Infantry_Calendar.ihq",
                     "size": 522748,
                     "sha256": "77d7406ae6d3e0be95fe2f3f8f23b479eb270b79b58fef2ead60e5a41870614c",
+                    "signer": null,
+                    "published": null,
+                    "notes": null,
+                    "yanked": false,
+                    "yankedReason": null
+                },
+                {
+                    "version": "1.0.2",
+                    "api": {
+                        "plugin": ">=2",
+                        "daemon": ">=1.66.0",
+                        "harness": null
+                    },
+                    "grants": [
+                        "daemon",
+                        "daemon.code",
+                        "daemon.frame",
+                        "daemon.route",
+                        "daemon.tool",
+                        "events",
+                        "storage"
+                    ],
+                    "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_Calendar-v1.0.2/Infantry_Calendar.ihq",
+                    "size": 527857,
+                    "sha256": "92289b419744659b1afd7abeb7d5ecde1198d14dd11201eb63a83dc449fd1604",
                     "signer": null,
                     "published": null,
                     "notes": null,
