@@ -1,0 +1,18 @@
+{
+  "id": "Infantry_Calendar",
+  "description": "Calendar: a planner for you and your agents. Tasks and reminders you or any agent can add (infantry_calendar_add, _timer, _list, _get, _update, _complete), a Calendar tab with a month grid, and reminders that fire on time.",
+  "tags": ["calendar","planner","reminder","agent"],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/SuperiorSoft-LLC/infantry-plugins",
+  "repo": "SuperiorSoft-LLC/infantry-plugins",
+  "versions": [
+    {
+      "version": "1.0.1",
+      "api": { "plugin": ">=2", "daemon": ">=1.66.0" },
+      "grants": ["daemon", "daemon.code", "daemon.frame", "daemon.tool", "events"],
+      "url": "https://github.com/SuperiorSoft-LLC/infantry-plugins/releases/download/Infantry_Calendar-v1.0.1/Infantry_Calendar.ihq",
+      "size": 522748,
+      "sha256": "77d7406ae6d3e0be95fe2f3f8f23b479eb270b79b58fef2ead60e5a41870614c"
+    }
+  ]
+}
