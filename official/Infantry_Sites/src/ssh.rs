@@ -26,6 +26,7 @@ pub const K_COMMAND_MAX_SEC: &str = "limits.sites.ssh.maxCommandTimeoutSec";
 pub const K_CERT_MARGIN_SEC: &str = "limits.sites.ssh.certMarginSec";
 pub const K_RETRY_SEC: &str = "limits.sites.ssh.retryAfterSec";
 pub const K_MAX_UPLOAD_BYTES: &str = "limits.sites.ssh.maxUploadBytes";
+pub const K_MAX_CONCURRENT: &str = "limits.sites.ssh.maxConcurrent";
 const DEFAULT_OUTPUT_BYTES: u64 = 65_536;
 const DEFAULT_CONNECT_SEC: u64 = 15;
 const DEFAULT_COMMAND_SEC: u64 = 120;
@@ -33,6 +34,7 @@ const DEFAULT_COMMAND_MAX_SEC: u64 = 1800;
 const DEFAULT_CERT_MARGIN_SEC: u64 = 300;
 const DEFAULT_RETRY_SEC: u64 = 15;
 const DEFAULT_MAX_UPLOAD_BYTES: u64 = 1_048_576;
+const DEFAULT_MAX_CONCURRENT: u64 = 4;
 
 /// What the SSH flow needs from the host besides the network: the plugin secret, plugin storage, settings, the clock.
 pub trait Store {
@@ -55,6 +57,7 @@ struct Limits {
     cert_margin_ms: u64,
     retry_sec: u64,
     max_upload: usize,
+    max_concurrent: usize,
 }
 
 impl Limits {
@@ -68,6 +71,7 @@ impl Limits {
             cert_margin_ms: n(K_CERT_MARGIN_SEC, DEFAULT_CERT_MARGIN_SEC) * 1000,
             retry_sec: n(K_RETRY_SEC, DEFAULT_RETRY_SEC),
             max_upload: n(K_MAX_UPLOAD_BYTES, DEFAULT_MAX_UPLOAD_BYTES) as usize,
+            max_concurrent: n(K_MAX_CONCURRENT, DEFAULT_MAX_CONCURRENT).max(1) as usize,
         }
     }
 }
@@ -124,7 +128,9 @@ fn state_fail<T>(v: &Value) -> Result<T, Out> {
     fail(text(v, "state").unwrap_or("unavailable"), text(v, "message").unwrap_or("hosting is not available"))
 }
 
-/// The certificates, shared by every call of the plugin (the lock also serialises first-time key generation).
+/// The certificates, shared by every call of the plugin, with the locks that keep concurrent calls from clashing: one
+/// for making the device key, one per server for its certificate request and first host-key pin, and the count of
+/// running SSH calls.
 pub type SharedCache = Arc<Mutex<CertCache>>;
 
 pub struct SshExec<N: Net, S: Store> {
@@ -161,6 +167,11 @@ impl<N: Net, S: Store> SshExec<N, S> {
                 return fail("bad_request", &format!("'content' is {} bytes; the limit is {} (setting {K_MAX_UPLOAD_BYTES})", b.len(), lim.max_upload));
             }
         }
+        // Past the limit a call is refused now, in words, before it opens anything.
+        let _running = match self.cache.lock().unwrap().try_run(lim.max_concurrent) {
+            Some(r) => r,
+            None => return fail("limit", &format!("{} SSH calls are already running (the most at once is {}, setting {K_MAX_CONCURRENT}); wait for one to finish and try again", lim.max_concurrent, lim.max_concurrent)),
+        };
         let Some(api) = self.sites.net().endpoint("api") else { return fail("not_configured", "This build names no hosting API endpoint.") };
         let listed = self.sites.list();
         if text(&listed, "state") != Some("ready") {
@@ -174,43 +185,70 @@ impl<N: Net, S: Store> SshExec<N, S> {
         }
         let account = self.account_identity();
 
-        // One lock for the cache and the device key: two first calls cannot make two keys.
-        let key = {
+        // Two first calls cannot make two keys: the key lock is held while the key is read or made. It is not the
+        // cache lock, so a slow secret store does not hold up the certificate cache.
+        let (setup, key_lock) = {
             let mut cache = self.cache.lock().unwrap();
             cache.set_account(&account);
+            (cache.setup_lock(&id), cache.key_lock())
+        };
+        let key = {
+            let _k = key_lock.lock().unwrap_or_else(|e| e.into_inner());
             self.device_key(secrets)?
         };
         let pin_key = hostkey::pin_key(&id);
         let key = Arc::new(key);
         let command_timeout = command_timeout(req.timeout_sec, &lim);
         let mut fresh = false;
+        // This server's setup lock: its certificate is asked for once however many calls arrive together, and its
+        // host key is pinned once. Other servers' calls do not wait for it. It is held while the certificate is
+        // fetched, and (first use only) until the pin is saved; a command runs without it.
+        let mut setup_guard: Option<std::sync::MutexGuard<'_, ()>> = None;
         loop {
-            let issued = {
-                let mut cache = self.cache.lock().unwrap();
-                match cache.get(&id, self.store.now_ms(), lim.cert_margin_ms) {
-                    Some(i) => i,
-                    None => {
-                        let pubkey = key.public_key().to_openssh().map_err(|_| Out::Fail("unavailable: the device key could not be encoded".into()))?;
-                        let issued = self.issue(&api, &id, &pubkey, &lim, secrets)?;
-                        cache.put(&id, issued.clone());
-                        issued
-                    }
+            if setup_guard.is_none() {
+                setup_guard = Some(setup.lock().unwrap_or_else(|e| e.into_inner()));
+            }
+            let cached = self.cache.lock().unwrap().get(&id, self.store.now_ms(), lim.cert_margin_ms);
+            let issued = match cached {
+                Some(i) => i,
+                None => {
+                    let pubkey = key.public_key().to_openssh().map_err(|_| Out::Fail("unavailable: the device key could not be encoded".into()))?;
+                    let issued = self.issue(&api, &id, &pubkey, &lim, secrets)?;
+                    self.cache.lock().unwrap().put(&id, issued.clone());
+                    issued
                 }
             };
             secrets.push(issued.certificate.clone());
             let cert = Certificate::from_openssh(&issued.certificate).map_err(|_| Out::Fail("unavailable: the hosting API sent a certificate that could not be read".into()))?;
             let target = Target { host: issued.host.clone(), port: issued.port, user: issued.user.clone(), reported: issued.host_key_fingerprint.clone(), pinned: self.store.kv_get(&pin_key) };
+            if target.reported.is_some() || target.pinned.is_some() {
+                // Nothing to pin: other calls to this server need not wait for this one to connect.
+                setup_guard = None;
+            }
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| Out::Fail("unavailable: the SSH client could not start".into()))?;
-            match rt.block_on(connect_and_run(&target, key.clone(), cert, &req.command, req.stdin.as_deref(), command_timeout, &lim)) {
-                Ok((out, new_pin)) => {
-                    if let Some(fp) = new_pin {
-                        // First use: the pin is kept for this server from now on (a failed save only means we pin again next time).
-                        let _ = self.store.kv_set(&pin_key, &fp);
-                    }
-                    return Ok(json!({
+            // The server accepted the certificate: on first use its key is pinned now, before the command runs, and the
+            // setup lock goes.
+            let mut signed_in = |new_pin: Option<String>| {
+                if let Some(fp) = new_pin {
+                    // A failed save only means the next call pins again.
+                    let _ = self.store.kv_set(&pin_key, &fp);
+                }
+                setup_guard = None;
+            };
+            match rt.block_on(connect_and_run(&target, key.clone(), cert, &req.command, req.stdin.as_deref(), command_timeout, &lim, &mut signed_in)) {
+                Ok(out) => {
+                    let mut answer = json!({
                         "server": name, "exitCode": out.exit_code, "stdout": out.stdout, "stderr": out.stderr,
                         "truncated": out.truncated, "timedOut": out.timed_out,
-                    }));
+                    });
+                    if out.timed_out {
+                        // The flag alone is easy to miss: say it in words too (the Kotlin plugin answered the flag only).
+                        answer["message"] = json!(format!(
+                            "timed out: the command did not finish within {} s and was stopped; stdout and stderr hold what it printed until then. Run it again with a larger timeoutSec (at most {} s, setting {K_COMMAND_MAX_SEC}) or in the background.",
+                            command_timeout.as_secs(), lim.command_max.as_secs()
+                        ));
+                    }
+                    return Ok(answer);
                 }
                 Err(Out::Fail(e)) => {
                     // One line per connect or auth failure: where, and why (the cause text holds no secret).
@@ -398,7 +436,9 @@ fn push_capped(buf: &mut Vec<u8>, data: &[u8], cap: usize, truncated: &mut bool)
     buf.extend_from_slice(&data[..data.len().min(room)]);
 }
 
-async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, command: &str, stdin: Option<&[u8]>, command_timeout: Duration, lim: &Limits) -> Result<(Output, Option<String>), Out> {
+/// `signed_in` runs once the server has accepted the certificate, with the host key to pin (first use), before the command.
+#[allow(clippy::too_many_arguments)]
+async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, command: &str, stdin: Option<&[u8]>, command_timeout: Duration, lim: &Limits, signed_in: &mut dyn FnMut(Option<String>)) -> Result<Output, Out> {
     let seen = Arc::new(Mutex::new(None));
     let shown = Arc::new(Mutex::new(None));
     let handler = Client { reported: t.reported.clone(), pinned: t.pinned.clone(), seen: seen.clone(), shown: shown.clone() };
@@ -430,6 +470,7 @@ async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, co
         Some(Verdict::Pin(fp)) => Some(fp),
         _ => None,
     };
+    signed_in(new_pin);
 
     let mut out = Output { exit_code: None, stdout: String::new(), stderr: String::new(), truncated: false, timed_out: false };
     let (mut so, mut se) = (Vec::new(), Vec::new());
@@ -461,7 +502,7 @@ async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, co
     out.stdout = String::from_utf8_lossy(&so).into_owned();
     out.stderr = String::from_utf8_lossy(&se).into_owned();
     let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
-    Ok((out, new_pin))
+    Ok(out)
 }
 
 /// A short, secret-free description of a russh error.

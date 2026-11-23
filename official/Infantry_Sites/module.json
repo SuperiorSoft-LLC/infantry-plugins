@@ -173,6 +173,17 @@
             "step": 1,
             "scope": "daemon",
             "order": 7
+          },
+          {
+            "key": "limits.sites.ssh.maxConcurrent",
+            "type": "number",
+            "label": "Most SSH calls running at once (past it a call is refused with a readable message)",
+            "default": 4,
+            "min": 1,
+            "max": 64,
+            "step": 1,
+            "scope": "daemon",
+            "order": 8
           }
         ]
       }

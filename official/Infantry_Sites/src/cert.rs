@@ -3,6 +3,8 @@
 //! The short-lived SSH certificates the hosting API signs for the device key (SVC-6), cached per account and server.
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// One issued certificate and the connection facts that came with it. Never `Debug`: the certificate stays out of logs.
 #[derive(Clone)]
@@ -36,6 +38,21 @@ pub fn parse_issued(body: &Value) -> Result<Issued, String> {
 pub struct CertCache {
     account: Option<String>,
     by_server: HashMap<String, Issued>,
+    /// One lock per server: its certificate request and, on first use, its host-key pin happen one call at a time.
+    setup: HashMap<String, Arc<Mutex<()>>>,
+    /// One lock for making the device key: two first calls cannot make two keys.
+    key: Arc<Mutex<()>>,
+    /// How many SSH calls are running now.
+    running: Arc<AtomicUsize>,
+}
+
+/// One running SSH call; counted until it is dropped.
+pub struct Running(Arc<AtomicUsize>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl CertCache {
@@ -61,6 +78,23 @@ impl CertCache {
     }
     pub fn put(&mut self, server: &str, issued: Issued) {
         self.by_server.insert(server.to_string(), issued);
+    }
+    /// The setup lock of one server (made on first ask).
+    pub fn setup_lock(&mut self, server: &str) -> Arc<Mutex<()>> {
+        self.setup.entry(server.to_string()).or_default().clone()
+    }
+    /// The lock that guards making the device key.
+    pub fn key_lock(&self) -> Arc<Mutex<()>> {
+        self.key.clone()
+    }
+    /// Counts one more running SSH call, or None when `limit` are already running.
+    pub fn try_run(&self, limit: usize) -> Option<Running> {
+        self.running.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < limit).then_some(n + 1)).ok()?;
+        Some(Running(self.running.clone()))
+    }
+    /// SSH calls running now.
+    pub fn running(&self) -> usize {
+        self.running.load(Ordering::SeqCst)
     }
 }
 
@@ -102,6 +136,25 @@ mod tests {
         c.put("s1", issued(1_000_000));
         c.clear();
         assert!(c.get("s1", 0, 0).is_none());
+    }
+    #[test]
+    fn a_run_slot_is_counted_until_dropped_and_none_is_given_past_the_limit() {
+        let c = CertCache::default();
+        let a = c.try_run(2).unwrap();
+        let b = c.try_run(2).unwrap();
+        assert!(c.try_run(2).is_none());
+        assert_eq!(c.running(), 2);
+        drop(a);
+        let again = c.try_run(2);
+        assert!(again.is_some(), "a freed slot is given again");
+        drop((b, again));
+        assert_eq!(c.running(), 0);
+    }
+    #[test]
+    fn one_server_has_one_setup_lock_and_two_servers_have_two() {
+        let mut c = CertCache::default();
+        assert!(Arc::ptr_eq(&c.setup_lock("s1"), &c.setup_lock("s1")));
+        assert!(!Arc::ptr_eq(&c.setup_lock("s1"), &c.setup_lock("s2")));
     }
     #[test]
     fn the_answer_is_parsed_and_a_short_one_is_refused() {

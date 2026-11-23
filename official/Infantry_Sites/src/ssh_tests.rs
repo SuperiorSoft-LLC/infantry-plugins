@@ -114,6 +114,11 @@ impl server::Handler for Handler {
                 session.exit_status_request(ch, 0)?;
             }
             "hang" => return Ok(()),
+            "slow" => {
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                session.data(ch, b"slow done\n".to_vec())?;
+                session.exit_status_request(ch, 0)?;
+            }
             _ => session.exit_status_request(ch, 127)?,
         }
         session.eof(ch)?;
@@ -775,4 +780,248 @@ fn an_upload_answer_and_log_hold_no_key_certificate_or_token() {
     let v = exec(&net, &store, &cache(), up("/s", "data")).unwrap();
     let all = format!("{v} {:?}", store.logs.borrow());
     assert!(!all.contains(TOKEN) && !all.contains("PRIVATE KEY") && !all.contains("-cert-v01"), "{all}");
+}
+
+// ---- concurrency (SVC-FIX-4): calls at the same time -------------------------------------------------------------
+
+/// A thread-safe fake of the host: the API signs for every server it lists, each at its own port.
+struct SyncNet {
+    signer: PrivateKey,
+    /// (id, name, port)
+    servers: Vec<(String, String, u16)>,
+    posts: AtomicUsize,
+    /// Held a moment inside the certificate request, so two calls that ask together overlap.
+    post_delay: Duration,
+}
+
+impl SyncNet {
+    fn new(signer: PrivateKey, servers: Vec<(&str, &str, u16)>) -> SyncNet {
+        SyncNet {
+            signer,
+            servers: servers.into_iter().map(|(i, n, p)| (i.to_string(), n.to_string(), p)).collect(),
+            posts: AtomicUsize::new(0),
+            post_delay: Duration::from_millis(200),
+        }
+    }
+}
+
+impl Net for &SyncNet {
+    fn endpoint(&self, n: &str) -> Option<String> {
+        (n == "api").then(|| "https://api.test".to_string())
+    }
+    fn frame(&self, kind: &str, _d: Value) -> Result<Value, String> {
+        match kind {
+            "account_token" => Ok(json!({ "accessToken": TOKEN })),
+            "account_status" => Ok(json!({ "email": "owner@example.test" })),
+            _ => Ok(json!({})),
+        }
+    }
+    fn get(&self, _url: &str, _b: &str) -> Result<(u16, Value), String> {
+        let list: Vec<Value> = self.servers.iter().map(|(i, n, _)| json!({"id": i, "name": n, "status": "active", "sshReady": true})).collect();
+        Ok((200, json!({ "servers": list })))
+    }
+    fn post(&self, url: &str, _bearer: &str, body: &Value) -> Result<(u16, Value), String> {
+        self.posts.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(self.post_delay);
+        let id = url.trim_start_matches("https://api.test/hosting/v1/servers/").trim_end_matches("/ssh/certificate");
+        let port = self.servers.iter().find(|s| s.0 == id).map(|s| s.2).ok_or("no such server")?;
+        let subject = PublicKey::from_openssh(body["publicKey"].as_str().unwrap()).unwrap();
+        let now = real_now_ms() / 1000;
+        let mut b = Builder::new_with_random_nonce(&mut rand::rng(), subject.key_data().clone(), now - 60, now + 3600).unwrap();
+        b.key_id("test").unwrap();
+        b.cert_type(CertType::User).unwrap();
+        b.valid_principal(USER).unwrap();
+        let cert = b.sign(&self.signer).unwrap().to_openssh().unwrap();
+        Ok((200, json!({"certificate": cert, "validBefore": (now + 3600) * 1000, "connection": {"host": "127.0.0.1", "port": port, "user": USER}})))
+    }
+}
+
+#[derive(Default)]
+struct SyncStore {
+    secrets: Mutex<HashMap<String, String>>,
+    kv: Mutex<HashMap<String, String>>,
+    settings: Mutex<HashMap<String, String>>,
+    secret_writes: AtomicUsize,
+    kv_writes: AtomicUsize,
+}
+
+impl Store for &SyncStore {
+    fn secret_get(&self, f: &str) -> Result<Option<String>, String> {
+        let v = self.secrets.lock().unwrap().get(f).cloned();
+        // A slow secret store: two first calls that read together both see nothing unless the key lock holds.
+        std::thread::sleep(Duration::from_millis(100));
+        Ok(v)
+    }
+    fn secret_set(&self, f: &str, v: &str) -> Result<(), String> {
+        self.secret_writes.fetch_add(1, Ordering::SeqCst);
+        self.secrets.lock().unwrap().insert(f.into(), v.into());
+        Ok(())
+    }
+    fn kv_get(&self, k: &str) -> Option<String> {
+        self.kv.lock().unwrap().get(k).cloned()
+    }
+    fn kv_set(&self, k: &str, v: &str) -> Result<(), String> {
+        self.kv_writes.fetch_add(1, Ordering::SeqCst);
+        self.kv.lock().unwrap().insert(k.into(), v.into());
+        Ok(())
+    }
+    fn setting(&self, k: &str) -> Option<String> {
+        self.settings.lock().unwrap().get(k).cloned()
+    }
+    fn now_ms(&self) -> u64 {
+        real_now_ms()
+    }
+    fn log(&self, _line: &str) {}
+}
+
+/// Two servers of one account (both trust the same CA), and the host fakes that serve them.
+fn two_servers() -> (TestServer, TestServer, SyncNet, SyncStore) {
+    let ca = new_key();
+    let (a, b) = (start_server(&ca, new_key()), start_server(&ca, new_key()));
+    let net = SyncNet::new(ca, vec![("s1", "web", a.port), ("s2", "db", b.port)]);
+    (a, b, net, SyncStore::default())
+}
+
+fn run_on(net: &SyncNet, store: &SyncStore, cache: &SharedCache, server: &str, cmd: &str) -> Result<Value, String> {
+    SshExec::new(net, store, cache.clone()).exec(named(server, cmd))
+}
+
+#[test]
+fn a_list_is_answered_while_a_long_command_runs() {
+    let (_a, _b, net, store) = two_servers();
+    let c = cache();
+    std::thread::scope(|s| {
+        let slow = s.spawn(|| run_on(&net, &store, &c, "s1", "slow"));
+        std::thread::sleep(Duration::from_millis(900)); // the command is on the wire by now
+        let t = std::time::Instant::now();
+        let listed = Sites::new(&net).list();
+        assert_eq!(listed["state"], "ready");
+        assert!(t.elapsed() < Duration::from_millis(500), "the list waited {:?} behind the command", t.elapsed());
+        assert_eq!(c.lock().unwrap().running(), 1, "the command is still running");
+        assert_eq!(slow.join().unwrap().unwrap()["stdout"], "slow done\n");
+    });
+}
+
+#[test]
+fn two_commands_on_different_servers_run_at_the_same_time() {
+    let (a, b, net, store) = two_servers();
+    let c = cache();
+    run_on(&net, &store, &c, "s1", "hello").unwrap(); // device key, certificates and pins are ready: only the commands race
+    run_on(&net, &store, &c, "s2", "hello").unwrap();
+    let t = std::time::Instant::now();
+    std::thread::scope(|s| {
+        let (x, y) = (s.spawn(|| run_on(&net, &store, &c, "s1", "slow")), s.spawn(|| run_on(&net, &store, &c, "s2", "slow")));
+        assert_eq!(x.join().unwrap().unwrap()["exitCode"], 0);
+        assert_eq!(y.join().unwrap().unwrap()["exitCode"], 0);
+    });
+    // Two 1.5 s commands one after the other would take 3 s.
+    assert!(t.elapsed() < Duration::from_millis(2600), "they ran one after the other: {:?}", t.elapsed());
+    assert!(a.seen.commands.lock().unwrap().contains(&"slow".to_string()) && b.seen.commands.lock().unwrap().contains(&"slow".to_string()));
+}
+
+#[test]
+fn two_commands_on_one_server_run_at_the_same_time_too() {
+    let (_a, _b, net, store) = two_servers();
+    let c = cache();
+    run_on(&net, &store, &c, "s1", "hello").unwrap();
+    let t = std::time::Instant::now();
+    std::thread::scope(|s| {
+        let (x, y) = (s.spawn(|| run_on(&net, &store, &c, "s1", "slow")), s.spawn(|| run_on(&net, &store, &c, "s1", "slow")));
+        x.join().unwrap().unwrap();
+        y.join().unwrap().unwrap();
+    });
+    assert!(t.elapsed() < Duration::from_millis(2600), "{:?}", t.elapsed());
+}
+
+#[test]
+fn first_use_from_two_calls_makes_one_key_asks_one_certificate_and_pins_once() {
+    let (a, _b, net, store) = two_servers();
+    let c = cache();
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|s| {
+        let go = || {
+            barrier.wait();
+            run_on(&net, &store, &c, "s1", "hello")
+        };
+        let (x, y) = (s.spawn(go), s.spawn(go));
+        assert_eq!(x.join().unwrap().unwrap()["exitCode"], 7);
+        assert_eq!(y.join().unwrap().unwrap()["exitCode"], 7);
+    });
+    assert_eq!(store.secret_writes.load(Ordering::SeqCst), 1, "one device key was made");
+    assert_eq!(net.posts.load(Ordering::SeqCst), 1, "one certificate was asked for");
+    assert_eq!(store.kv_writes.load(Ordering::SeqCst), 1, "the host key was pinned once");
+    assert_eq!(store.kv.lock().unwrap().get(&hostkey::pin_key("s1")).map(|p| hostkey::norm(p)), Some(hostkey::norm(&a.host_fp)));
+    assert_eq!(a.seen.auth_attempts.load(Ordering::SeqCst), 2, "both calls signed in");
+}
+
+#[test]
+fn first_use_on_two_servers_at_once_still_makes_one_device_key_and_one_pin_each() {
+    let (a, b, net, store) = two_servers();
+    let c = cache();
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|s| {
+        let (x, y) = (
+            s.spawn(|| {
+                barrier.wait();
+                run_on(&net, &store, &c, "s1", "hello")
+            }),
+            s.spawn(|| {
+                barrier.wait();
+                run_on(&net, &store, &c, "s2", "hello")
+            }),
+        );
+        x.join().unwrap().unwrap();
+        y.join().unwrap().unwrap();
+    });
+    assert_eq!(store.secret_writes.load(Ordering::SeqCst), 1, "one device key for both servers");
+    assert_eq!(net.posts.load(Ordering::SeqCst), 2, "a certificate for each server");
+    let kv = store.kv.lock().unwrap();
+    assert_eq!(kv.get(&hostkey::pin_key("s1")).map(|p| hostkey::norm(p)), Some(hostkey::norm(&a.host_fp)));
+    assert_eq!(kv.get(&hostkey::pin_key("s2")).map(|p| hostkey::norm(p)), Some(hostkey::norm(&b.host_fp)));
+}
+
+#[test]
+fn past_the_limit_a_call_is_refused_in_words_and_nothing_is_sent_and_a_freed_slot_works_again() {
+    let (a, _b, net, store) = two_servers();
+    store.settings.lock().unwrap().insert(K_MAX_CONCURRENT.into(), "1".into());
+    let c = cache();
+    run_on(&net, &store, &c, "s1", "hello").unwrap();
+    std::thread::scope(|s| {
+        let slow = s.spawn(|| run_on(&net, &store, &c, "s1", "slow"));
+        std::thread::sleep(Duration::from_millis(900));
+        let e = run_on(&net, &store, &c, "s1", "hello").unwrap_err();
+        assert!(e.starts_with("limit: 1 SSH calls are already running"), "{e}");
+        assert!(e.contains(K_MAX_CONCURRENT) && e.contains("try again"), "{e}");
+        assert_eq!(a.seen.commands.lock().unwrap().iter().filter(|c| c.as_str() == "hello").count(), 1, "the refused call ran nothing");
+        slow.join().unwrap().unwrap();
+    });
+    assert_eq!(c.lock().unwrap().running(), 0, "every slot came back");
+    assert_eq!(run_on(&net, &store, &c, "s1", "hello").unwrap()["exitCode"], 7);
+}
+
+#[test]
+fn the_default_limit_lets_four_calls_run_together_and_refuses_the_fifth() {
+    let (_a, _b, net, store) = two_servers();
+    let c = cache();
+    run_on(&net, &store, &c, "s1", "hello").unwrap();
+    std::thread::scope(|s| {
+        let running: Vec<_> = (0..4).map(|_| s.spawn(|| run_on(&net, &store, &c, "s1", "slow"))).collect();
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(run_on(&net, &store, &c, "s1", "hello").unwrap_err().starts_with("limit: 4 SSH calls are already running"));
+        for r in running {
+            r.join().unwrap().unwrap();
+        }
+    });
+}
+
+#[test]
+fn a_command_that_timed_out_says_so_in_words_as_well_as_the_flag() {
+    let (_srv, net) = world(true);
+    let v = exec(&net, &FakeStore::default(), &cache(), Request { server: None, command: "hang".into(), timeout_sec: Some(1), stdin: None }).unwrap();
+    assert_eq!(v["timedOut"], true);
+    let m = v["message"].as_str().expect("a message");
+    assert!(m.starts_with("timed out: the command did not finish within 1 s"), "{m}");
+    assert!(m.contains("timeoutSec") && m.contains(K_COMMAND_MAX_SEC), "{m}");
+    let ok = exec(&net, &FakeStore::default(), &cache(), req("hello")).unwrap();
+    assert!(ok.get("message").is_none(), "a command that finished has no message");
 }
