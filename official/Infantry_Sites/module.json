@@ -82,6 +82,28 @@
     },
     "config": [
       {
+        "node": "Infantry_Sites.refresh",
+        "group": "Sites",
+        "title": "Sites tab",
+        "tab": "Plugins",
+        "order": 980,
+        "applies": "Applies to: the Sites tab while it is open and visible.",
+        "keywords": ["sites", "hosting", "refresh", "servers"],
+        "fields": [
+          {
+            "key": "sites.refreshSeconds",
+            "type": "number",
+            "label": "Re-read the server list every (seconds, 0 = off)",
+            "default": 30,
+            "min": 0,
+            "max": 3600,
+            "step": 1,
+            "scope": "app",
+            "order": 1
+          }
+        ]
+      },
+      {
         "node": "Infantry_Sites.ssh",
         "group": "Hosting",
         "title": "SSH for agents",
