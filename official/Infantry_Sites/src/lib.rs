@@ -36,6 +36,32 @@ impl Net for HostNet {
         let v = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
         Ok((r.status, v))
     }
+    fn get_ra(&self, url: &str, bearer: &str) -> Result<(u16, Value, Option<u64>), String> {
+        let req = host::http::HttpRequest {
+            method: "GET".into(),
+            url: url.into(),
+            headers: vec![("authorization".into(), format!("Bearer {bearer}")), ("accept".into(), "application/json".into())],
+            body: None,
+            timeout_ms: Some(15_000),
+        };
+        let r = host::http::send(&req)?;
+        Ok((r.status, serde_json::from_slice(&r.body).unwrap_or(Value::Null), retry_after(&r.headers)))
+    }
+    fn post_ra(&self, url: &str, bearer: &str, body: &Value) -> Result<(u16, Value, Option<u64>), String> {
+        let req = host::http::HttpRequest {
+            method: "POST".into(),
+            url: url.into(),
+            headers: vec![
+                ("authorization".into(), format!("Bearer {bearer}")),
+                ("accept".into(), "application/json".into()),
+                ("content-type".into(), "application/json".into()),
+            ],
+            body: Some(body.to_string().into_bytes()),
+            timeout_ms: Some(15_000),
+        };
+        let r = host::http::send(&req)?;
+        Ok((r.status, serde_json::from_slice(&r.body).unwrap_or(Value::Null), retry_after(&r.headers)))
+    }
     fn post(&self, url: &str, bearer: &str, body: &Value) -> Result<(u16, Value), String> {
         let req = host::http::HttpRequest {
             method: "POST".into(),
@@ -52,6 +78,11 @@ impl Net for HostNet {
         let v = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
         Ok((r.status, v))
     }
+}
+
+/// The `Retry-After` header in whole seconds (a date form is ignored).
+fn retry_after(headers: &[(String, String)]) -> Option<u64> {
+    headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("retry-after")).and_then(|(_, v)| v.trim().parse::<u64>().ok())
 }
 
 /// The plugin secret, plugin storage, settings and clock of the real host.
@@ -74,6 +105,9 @@ impl Store for HostStore {
     }
     fn setting(&self, key: &str) -> Option<String> {
         host::settings::get(key)
+    }
+    fn log(&self, line: &str) {
+        host::log::warn(line);
     }
     fn now_ms(&self) -> u64 {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)

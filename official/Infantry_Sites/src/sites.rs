@@ -17,6 +17,14 @@ pub trait Net {
     fn get(&self, url: &str, bearer: &str) -> Result<(u16, Value), String>;
     /// POST a JSON body with a bearer token: (status, JSON body; Null when the body is not JSON).
     fn post(&self, url: &str, bearer: &str, body: &Value) -> Result<(u16, Value), String>;
+    /// GET that also reports a `Retry-After` header in seconds. Hosts that can read headers override it.
+    fn get_ra(&self, url: &str, bearer: &str) -> Result<(u16, Value, Option<u64>), String> {
+        self.get(url, bearer).map(|(s, b)| (s, b, None))
+    }
+    /// POST that also reports a `Retry-After` header in seconds.
+    fn post_ra(&self, url: &str, bearer: &str, body: &Value) -> Result<(u16, Value, Option<u64>), String> {
+        self.post(url, bearer, body).map(|(s, b)| (s, b, None))
+    }
 }
 
 pub struct Sites<N: Net> {
@@ -123,7 +131,7 @@ impl<N: Net> Sites<N> {
 
     fn try_get(&self, url: &str) -> Result<Got, Value> {
         let token = self.token()?;
-        let (status, body) = self.net.get(url, &token).map_err(|_| state("unavailable", "Hosting could not be reached. Try again in a moment."))?;
+        let (status, body, retry_after) = self.net.get_ra(url, &token).map_err(|_| state("unavailable", "Hosting could not be reached. Try again in a moment."))?;
         let code = code_of(&body);
         Ok(Got::Answer(match status {
             200 => {
@@ -140,12 +148,20 @@ impl<N: Net> Sites<N> {
                 plan_fields(&body, &mut v, &["planStatus", "reclaimableUntil"]);
                 v
             }
+            409 if code == "scheduled_for_destroy" => state("bad_request", &message_of(&body, "this server is scheduled to be destroyed")),
             409 => {
                 let mut v = state("limit", &message_of(&body, "You reached your server limit."));
                 plan_fields(&body, &mut v, &["limit"]);
                 v
             }
-            404 | 501 => state("not_configured", "This hosting service is not set up."),
+            404 => state("not_found", "no such server"),
+            501 => state("not_configured", "This hosting service is not set up."),
+            400 | 422 => state("bad_request", &message_of(&body, "the request was refused")),
+            429 => state("unavailable", &match retry_after {
+                Some(s) => format!("slow down: too many requests, try again in {s} s"),
+                None => "slow down: too many requests, try again later".to_string(),
+            }),
+            502 => state("unavailable", "The hosting provider had a problem. Try again in a minute."),
             503 if code == "not_configured" => state("not_configured", &message_of(&body, "This hosting service is not set up.")),
             _ => state("unavailable", &message_of(&body, "Hosting is not available right now.")),
         }))
@@ -156,7 +172,7 @@ impl<N: Net> Sites<N> {
 fn server(s: &Value) -> Value {
     let g = |k: &str| s.get(k).cloned().unwrap_or(Value::Null);
     json!({
-        "id": g("id"), "name": g("name"), "status": g("status"), "sshReady": s.get("sshReady").and_then(Value::as_bool).unwrap_or(false),
+        "id": g("id"), "name": g("name"), "status": g("status"), "sshReady": s.get("sshReady").and_then(Value::as_bool).unwrap_or(true),
         "ip": g("ip"), "region": g("region"), "size": g("size"), "createdAt": g("createdAt"), "destroyAt": g("destroyAt"),
     })
 }
@@ -173,6 +189,7 @@ mod tests {
         token: Option<Result<Value, String>>,
         replies: RefCell<VecDeque<Result<(u16, Value), String>>>,
         calls: RefCell<Vec<String>>,
+        retry_after: std::cell::Cell<Option<u64>>,
     }
     impl Net for &Fake {
         fn endpoint(&self, n: &str) -> Option<String> {
@@ -194,6 +211,9 @@ mod tests {
             assert_eq!(url, "https://api.test/hosting/v1/servers");
             assert_eq!(bearer, "tok");
             self.replies.borrow_mut().pop_front().expect("a reply")
+        }
+        fn get_ra(&self, url: &str, bearer: &str) -> Result<(u16, Value, Option<u64>), String> {
+            self.get(url, bearer).map(|(s, b)| (s, b, self.retry_after.get()))
         }
         fn post(&self, _url: &str, _bearer: &str, _body: &Value) -> Result<(u16, Value), String> {
             unreachable!("the list tests never post")
@@ -276,6 +296,29 @@ mod tests {
     fn unavailable_on_a_network_error_and_on_500() {
         assert_eq!(answer(&fake(vec![Err("connection refused".into())]))["state"], "unavailable");
         assert_eq!(answer(&fake(vec![Ok((500, Value::Null))]))["state"], "unavailable");
+    }
+    #[test]
+    fn b22_a_server_without_sshready_is_ready() {
+        let f = fake(vec![Ok((200, json!({"servers": [{"id": "s1", "name": "a"}, {"id": "s2", "sshReady": false}]})))]);
+        let v = answer(&f);
+        assert_eq!((v["servers"][0]["sshReady"].clone(), v["servers"][1]["sshReady"].clone()), (json!(true), json!(false)));
+    }
+    #[test]
+    fn b23_the_list_error_map_follows_the_kotlin_plugin() {
+        let state_of = |status, body: Value, ra: Option<u64>| {
+            let f = fake(vec![Ok((status, body))]);
+            f.retry_after.set(ra);
+            answer(&f)
+        };
+        assert_eq!(state_of(404, json!({}), None)["state"], "not_found");
+        assert_eq!(state_of(400, json!({"message": "bad filter"}), None)["message"], "bad filter");
+        assert_eq!(state_of(422, json!({}), None)["state"], "bad_request");
+        assert_eq!(state_of(409, json!({"error": "scheduled_for_destroy", "message": "going away"}), None)["state"], "bad_request");
+        assert_eq!(state_of(409, json!({"limit": 2}), None)["state"], "limit");
+        assert_eq!(state_of(429, json!({}), Some(12))["message"], "slow down: too many requests, try again in 12 s");
+        assert_eq!(state_of(429, json!({}), None)["message"], "slow down: too many requests, try again later");
+        assert_eq!(state_of(502, json!({"message": "do not show"}), None)["message"], "The hosting provider had a problem. Try again in a minute.");
+        assert_eq!(state_of(501, json!({}), None)["state"], "not_configured");
     }
     #[test]
     fn no_token_ever_appears_in_an_answer() {

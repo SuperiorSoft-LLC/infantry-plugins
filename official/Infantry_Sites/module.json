@@ -22,7 +22,8 @@
     ],
     "wants": [
       "settings",
-      "config"
+      "config",
+      "log"
     ],
     "tools": [
       {
@@ -118,7 +119,7 @@
             "key": "limits.sites.ssh.commandTimeoutSec",
             "type": "number",
             "label": "Command timeout when the call names none (seconds)",
-            "default": 60,
+            "default": 120,
             "min": 1,
             "max": 3600,
             "step": 1,
@@ -129,7 +130,7 @@
             "key": "limits.sites.ssh.maxCommandTimeoutSec",
             "type": "number",
             "label": "Longest command timeout a call may ask for (seconds)",
-            "default": 600,
+            "default": 1800,
             "min": 1,
             "max": 86400,
             "step": 1,
@@ -140,7 +141,7 @@
             "key": "limits.sites.ssh.certMarginSec",
             "type": "number",
             "label": "Ask for a new SSH certificate this long before the old one ends (seconds)",
-            "default": 60,
+            "default": 300,
             "min": 0,
             "max": 3600,
             "step": 1,

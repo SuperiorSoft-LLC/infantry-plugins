@@ -133,6 +133,9 @@ struct FakeNet {
     posts: Cell<usize>,
     posted_keys: RefCell<Vec<String>>,
     issued_certs: RefCell<Vec<String>>,
+    /// How many of the next certificates are signed by a stranger (the server will refuse them).
+    bad_first: Cell<usize>,
+    retry_after: Cell<Option<u64>>,
 }
 
 impl FakeNet {
@@ -150,6 +153,8 @@ impl FakeNet {
             posts: Cell::new(0),
             posted_keys: RefCell::new(vec![]),
             issued_certs: RefCell::new(vec![]),
+            bad_first: Cell::new(0),
+            retry_after: Cell::new(None),
         }
     }
 }
@@ -185,13 +190,21 @@ impl Net for &FakeNet {
         b.key_id("test").unwrap();
         b.cert_type(CertType::User).unwrap();
         b.valid_principal(USER).unwrap();
-        let cert = b.sign(&self.signer).unwrap().to_openssh().unwrap();
+        let cert = if self.bad_first.get() > 0 {
+            self.bad_first.set(self.bad_first.get() - 1);
+            b.sign(&new_key()).unwrap().to_openssh().unwrap()
+        } else {
+            b.sign(&self.signer).unwrap().to_openssh().unwrap()
+        };
         self.issued_certs.borrow_mut().push(cert.clone());
         let mut conn = json!({"host": "127.0.0.1", "port": self.port, "user": USER});
         if let Some(fp) = self.reported.borrow().clone() {
             conn["hostKeyFingerprint"] = json!(fp);
         }
         Ok((200, json!({"certificate": cert, "validBefore": before * 1000, "connection": conn})))
+    }
+    fn post_ra(&self, url: &str, bearer: &str, body: &Value) -> Result<(u16, Value, Option<u64>), String> {
+        self.post(url, bearer, body).map(|(s, b)| (s, b, self.retry_after.get()))
     }
 }
 
@@ -202,6 +215,7 @@ struct FakeStore {
     settings: RefCell<HashMap<String, String>>,
     now_offset_ms: Cell<u64>,
     secret_writes: Cell<usize>,
+    logs: RefCell<Vec<String>>,
 }
 
 impl Store for &FakeStore {
@@ -225,6 +239,9 @@ impl Store for &FakeStore {
     }
     fn now_ms(&self) -> u64 {
         real_now_ms() + self.now_offset_ms.get()
+    }
+    fn log(&self, line: &str) {
+        self.logs.borrow_mut().push(line.to_string());
     }
 }
 
@@ -282,11 +299,11 @@ fn a_cached_certificate_is_reused_until_the_margin_before_it_ends() {
     exec(&net, &store, &c, req("hello")).unwrap();
     exec(&net, &store, &c, req("hello")).unwrap();
     assert_eq!(net.posts.get(), 1, "second call is a cache hit");
-    // The certificate lives 3600 s and the margin is 60 s: at +3530 s it is still used, at +3545 s it is not.
-    store.now_offset_ms.set(3_530_000);
+    // The certificate lives 3600 s and the default margin is 300 s: at +3250 s it is still used, at +3350 s it is not.
+    store.now_offset_ms.set(3_250_000);
     exec(&net, &store, &c, req("hello")).unwrap();
     assert_eq!(net.posts.get(), 1, "still before the margin");
-    store.now_offset_ms.set(3_545_000);
+    store.now_offset_ms.set(3_350_000);
     exec(&net, &store, &c, req("hello")).unwrap();
     assert_eq!(net.posts.get(), 2, "inside the margin: a new certificate");
 }
@@ -462,6 +479,7 @@ fn no_key_certificate_or_token_text_reaches_an_answer_or_an_error() {
     shown.push(format!("{:?}", exec(&net, &store, &cache(), req("hello"))));
     *net.cert_reply.borrow_mut() = Some((500, json!({"message": format!("boom {TOKEN}")})));
     shown.push(format!("{:?}", exec(&net, &store, &cache(), req("hello"))));
+    shown.extend(store.logs.borrow().iter().cloned());
     let all = shown.join("\n");
     let pem = store.secrets.borrow().get(SECRET_FIELD).cloned().unwrap();
     let pem_body: Vec<&str> = pem.lines().filter(|l| !l.starts_with("-----")).collect();
@@ -476,3 +494,165 @@ fn no_key_certificate_or_token_text_reaches_an_answer_or_an_error() {
     }
     assert!(all.contains("[removed]"), "the token echoed by the API was scrubbed");
 }
+
+// ---- SSH parity with the Kotlin plugin (SVC-G1/G2) ------------------------------------------------------------
+
+fn b64(bytes: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn b4_b5_b6_the_live_defaults_are_120_1800_and_300_seconds_in_code_and_in_the_manifest() {
+    let lim = Limits::load(&&FakeStore::default());
+    assert_eq!((lim.command, lim.command_max, lim.cert_margin_ms), (Duration::from_secs(120), Duration::from_secs(1800), 300_000));
+    let manifest: Value = serde_json::from_str(include_str!("../module.json")).unwrap();
+    let fields = manifest["daemon"]["config"][0]["fields"].as_array().unwrap();
+    let default_of = |key: &str| fields.iter().find(|f| f["key"] == key).unwrap()["default"].as_u64().unwrap();
+    assert_eq!((default_of(K_COMMAND_SEC), default_of(K_COMMAND_MAX_SEC), default_of(K_CERT_MARGIN_SEC)), (120, 1800, 300));
+    // The setting keys are the ones that were already there.
+    assert_eq!((K_COMMAND_SEC, K_COMMAND_MAX_SEC, K_CERT_MARGIN_SEC), ("limits.sites.ssh.commandTimeoutSec", "limits.sites.ssh.maxCommandTimeoutSec", "limits.sites.ssh.certMarginSec"));
+}
+
+#[test]
+fn b5_a_call_may_ask_up_to_the_maximum_and_no_more() {
+    let lim = Limits::load(&&FakeStore::default());
+    assert_eq!(command_timeout(Some(1800), &lim), Duration::from_secs(1800));
+    assert_eq!(command_timeout(Some(99_999), &lim), Duration::from_secs(1800));
+}
+
+#[test]
+fn b10_a_timeout_of_zero_or_none_is_the_default() {
+    let lim = Limits::load(&&FakeStore::default());
+    assert_eq!(command_timeout(Some(0), &lim), Duration::from_secs(120));
+    assert_eq!(command_timeout(None, &lim), Duration::from_secs(120));
+    assert_eq!(command_timeout(Some(5), &lim), Duration::from_secs(5));
+    // A negative number is not a u64: the request carries none.
+    assert_eq!(parse_request(r#"{"command":"ls","timeoutSec":-3}"#).unwrap().timeout_sec, None);
+}
+
+#[test]
+fn b11_two_servers_of_one_name_are_refused_and_an_id_is_matched_in_any_case() {
+    let (_srv, net) = world(true);
+    let store = FakeStore::default();
+    net.servers.borrow_mut().push(json!({"id": "S2", "name": "Web", "status": "active", "sshReady": true}));
+    let e = exec(&net, &store, &cache(), named("web", "hello")).unwrap_err();
+    assert_eq!(e, "bad_request: 2 servers are named 'web'; pass its id");
+    assert!(exec(&net, &store, &cache(), named("s1", "hello")).is_ok(), "the id picks the first");
+    // The second one has a certificate asked for under its own id.
+    assert_eq!(exec(&net, &store, &cache(), named("s2", "hello")).unwrap()["server"], "Web");
+}
+
+#[test]
+fn b12_a_legacy_base64_seed_is_rebuilt_into_the_same_key_and_left_in_place() {
+    let (_srv, net) = world(true);
+    let store = FakeStore::default();
+    let seed = [7u8; 32];
+    let legacy = b64(&seed);
+    store.secrets.borrow_mut().insert(SECRET_FIELD.into(), legacy.clone());
+    let v = exec(&net, &store, &cache(), req("hello")).unwrap();
+    assert_eq!(v["exitCode"], 7);
+    let want = PrivateKey::from(Ed25519Keypair::from_seed(&seed)).public_key().to_openssh().unwrap();
+    assert_eq!(net.posted_keys.borrow()[0], want, "the certificate is for the key the Kotlin app made");
+    assert_eq!(store.secret_writes.get(), 0, "the stored seed is untouched");
+    assert!(!format!("{v:?}").contains(&legacy));
+    // Anything that is neither a PEM nor a 32-byte seed is still a clear error, never a new key.
+    store.secrets.borrow_mut().insert(SECRET_FIELD.into(), b64(&[1u8; 20]));
+    assert!(exec(&net, &store, &cache(), req("hello")).unwrap_err().starts_with("unavailable: the stored SSH device key"));
+    assert_eq!(store.secret_writes.get(), 0);
+}
+
+#[test]
+fn b14_the_certificate_errors_400_429_and_502_are_mapped_like_the_kotlin_plugin() {
+    let (_srv, net) = world(true);
+    let store = FakeStore::default();
+    *net.cert_reply.borrow_mut() = Some((400, json!({"error": "bad_public_key"})));
+    assert_eq!(exec(&net, &store, &cache(), req("hello")).unwrap_err(), "bad_request: the hosting service refused this PC's SSH key");
+    *net.cert_reply.borrow_mut() = Some((429, json!({})));
+    net.retry_after.set(Some(30));
+    assert_eq!(exec(&net, &store, &cache(), req("hello")).unwrap_err(), "unavailable: slow down: too many requests, try again in 30 s");
+    net.retry_after.set(None);
+    assert_eq!(exec(&net, &store, &cache(), req("hello")).unwrap_err(), "unavailable: slow down: too many requests, try again later");
+    *net.cert_reply.borrow_mut() = Some((502, json!({"message": "droplet api said no"})));
+    assert_eq!(exec(&net, &store, &cache(), req("hello")).unwrap_err(), "unavailable: The hosting provider had a problem. Try again in a minute.");
+    // 403 without a server text names the permission; 409 setting-up takes the Retry-After header when the body has no seconds.
+    *net.cert_reply.borrow_mut() = Some((403, json!({})));
+    assert!(exec(&net, &store, &cache(), req("hello")).unwrap_err().contains("hosting.servers.ssh"));
+    *net.cert_reply.borrow_mut() = Some((409, json!({"error": "server_setting_up"})));
+    net.retry_after.set(Some(45));
+    assert_eq!(exec(&net, &store, &cache(), req("hello")).unwrap()["retryAfterSec"], 45);
+}
+
+#[test]
+fn b16_after_auth_failed_the_cached_certificate_is_forgotten_and_one_fresh_one_is_tried() {
+    let (srv, net) = world(true);
+    let store = FakeStore::default();
+    let c = cache();
+    net.bad_first.set(1); // the first certificate is refused by the server, the next one is good
+    let v = exec(&net, &store, &c, req("hello")).unwrap();
+    assert_eq!(v["exitCode"], 7);
+    assert_eq!(net.posts.get(), 2, "one stale certificate, one fresh one");
+    assert_eq!(srv.seen.auth_attempts.load(Ordering::SeqCst), 2);
+    // A good certificate is cached again: the next call asks for nothing.
+    exec(&net, &store, &c, req("hello")).unwrap();
+    assert_eq!(net.posts.get(), 2);
+    // Two refusals in a row: it stops after the one retry.
+    net.bad_first.set(2);
+    let c2 = cache();
+    let e = exec(&net, &store, &c2, req("hello")).unwrap_err();
+    assert!(e.starts_with("auth_failed:"), "{e}");
+    assert_eq!(net.posts.get(), 4);
+}
+
+#[test]
+fn b18_a_host_key_refusal_names_both_fingerprints() {
+    let (srv, net) = world(true);
+    let wrong = "SHA256:notTheRealHostKeyFingerprintAAAAAAAAAAAAAAAAA";
+    *net.reported.borrow_mut() = Some(wrong.into());
+    let e = exec(&net, &FakeStore::default(), &cache(), req("hello")).unwrap_err();
+    assert!(e.starts_with("host_key_mismatch:") && e.contains(wrong) && e.contains(&srv.host_fp), "{e}");
+    // A pinned key that changed names both too.
+    let store = FakeStore::default();
+    *net.reported.borrow_mut() = None;
+    exec(&net, &store, &cache(), req("hello")).unwrap();
+    let (srv2, net2) = world(true);
+    let e = exec(&net2, &store, &cache(), req("hello")).unwrap_err();
+    assert!(e.contains(&srv2.host_fp) && e.contains(&hostkey::norm(&srv.host_fp)), "{e}");
+}
+
+#[test]
+fn b20_a_connect_or_auth_failure_writes_one_log_line_with_host_port_and_no_secret() {
+    let (srv, net) = world(false); // the server refuses the certificate
+    let store = FakeStore::default();
+    let e = exec(&net, &store, &cache(), req("hello")).unwrap_err();
+    assert!(e.starts_with("auth_failed:"));
+    let logs = store.logs.borrow().clone();
+    assert_eq!(logs.len(), 2, "the failure and its one retry: {logs:?}");
+    let place = format!("127.0.0.1:{}", srv.port);
+    for l in &logs {
+        assert!(l.contains(&place) && l.contains("auth_failed"), "{l}");
+        assert!(!l.contains(TOKEN) && !l.contains("ssh-ed25519") && !l.contains("BEGIN"), "{l}");
+    }
+    // Nothing listens: a connect failure is logged with its host and port too.
+    let (_srv, mut net) = world(true);
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    net.port = dead.local_addr().unwrap().port();
+    drop(dead);
+    let store = FakeStore::default();
+    assert!(exec(&net, &store, &cache(), req("hello")).unwrap_err().starts_with("unavailable:"));
+    let logs = store.logs.borrow().clone();
+    assert_eq!(logs.len(), 1);
+    assert!(logs[0].contains(&format!("127.0.0.1:{}", net.port)), "{logs:?}");
+}
+

@@ -55,6 +55,10 @@ impl CertCache {
     pub fn get(&self, server: &str, now_ms: u64, margin_ms: u64) -> Option<Issued> {
         self.by_server.get(server).filter(|i| now_ms.saturating_add(margin_ms) < i.valid_before).cloned()
     }
+    /// Forget one server's certificate (the server refused it).
+    pub fn forget(&mut self, server: &str) {
+        self.by_server.remove(server);
+    }
     pub fn put(&mut self, server: &str, issued: Issued) {
         self.by_server.insert(server.to_string(), issued);
     }

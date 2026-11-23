@@ -9,7 +9,7 @@ use crate::cert::{parse_issued, CertCache, Issued};
 use crate::hostkey::{self, Verdict};
 use crate::sites::{code_of, message_of, text, Net, Sites, PROVIDER};
 use russh::client;
-use russh::keys::{ssh_key::LineEnding, Algorithm, Certificate, HashAlg, PrivateKey, PublicKeyOrCertificate};
+use russh::keys::{ssh_key::private::Ed25519Keypair, ssh_key::LineEnding, Algorithm, Certificate, HashAlg, PrivateKey, PublicKeyOrCertificate};
 use russh::ChannelMsg;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -27,9 +27,9 @@ pub const K_CERT_MARGIN_SEC: &str = "limits.sites.ssh.certMarginSec";
 pub const K_RETRY_SEC: &str = "limits.sites.ssh.retryAfterSec";
 const DEFAULT_OUTPUT_BYTES: u64 = 65_536;
 const DEFAULT_CONNECT_SEC: u64 = 15;
-const DEFAULT_COMMAND_SEC: u64 = 60;
-const DEFAULT_COMMAND_MAX_SEC: u64 = 600;
-const DEFAULT_CERT_MARGIN_SEC: u64 = 60;
+const DEFAULT_COMMAND_SEC: u64 = 120;
+const DEFAULT_COMMAND_MAX_SEC: u64 = 1800;
+const DEFAULT_CERT_MARGIN_SEC: u64 = 300;
 const DEFAULT_RETRY_SEC: u64 = 15;
 
 /// What the SSH flow needs from the host besides the network: the plugin secret, plugin storage, settings, the clock.
@@ -40,6 +40,8 @@ pub trait Store {
     fn kv_set(&self, key: &str, value: &str) -> Result<(), String>;
     fn setting(&self, key: &str) -> Option<String>;
     fn now_ms(&self) -> u64;
+    /// One line into the daemon log (a secret-free cause; never a key, certificate or token).
+    fn log(&self, line: &str);
 }
 
 #[derive(Clone, Copy)]
@@ -142,36 +144,57 @@ impl<N: Net, S: Store> SshExec<N, S> {
         let account = self.account_identity();
 
         // One lock for the cache and the device key: two first calls cannot make two keys.
-        let (key, issued) = {
+        let key = {
             let mut cache = self.cache.lock().unwrap();
             cache.set_account(&account);
-            let key = self.device_key(secrets)?;
-            match cache.get(&id, self.store.now_ms(), lim.cert_margin_ms) {
-                Some(i) => (key, i),
-                None => {
-                    let pubkey = key.public_key().to_openssh().map_err(|_| Out::Fail("unavailable: the device key could not be encoded".into()))?;
-                    let issued = self.issue(&api, &id, &pubkey, &lim, secrets)?;
-                    cache.put(&id, issued.clone());
-                    (key, issued)
-                }
-            }
+            self.device_key(secrets)?
         };
-        secrets.push(issued.certificate.clone());
-
-        let cert = Certificate::from_openssh(&issued.certificate).map_err(|_| Out::Fail("unavailable: the hosting API sent a certificate that could not be read".into()))?;
-        let command_timeout = req.timeout_sec.map(|t| Duration::from_secs(t.max(1))).unwrap_or(lim.command).min(lim.command_max);
         let pin_key = hostkey::pin_key(&id);
-        let target = Target { host: issued.host.clone(), port: issued.port, user: issued.user.clone(), reported: issued.host_key_fingerprint.clone(), pinned: self.store.kv_get(&pin_key) };
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| Out::Fail("unavailable: the SSH client could not start".into()))?;
-        let (out, new_pin) = rt.block_on(connect_and_run(&target, Arc::new(key), cert, &req.command, command_timeout, &lim))?;
-        if let Some(fp) = new_pin {
-            // First use: the pin is kept for this server from now on (a failed save only means we pin again next time).
-            let _ = self.store.kv_set(&pin_key, &fp);
+        let key = Arc::new(key);
+        let command_timeout = command_timeout(req.timeout_sec, &lim);
+        let mut fresh = false;
+        loop {
+            let issued = {
+                let mut cache = self.cache.lock().unwrap();
+                match cache.get(&id, self.store.now_ms(), lim.cert_margin_ms) {
+                    Some(i) => i,
+                    None => {
+                        let pubkey = key.public_key().to_openssh().map_err(|_| Out::Fail("unavailable: the device key could not be encoded".into()))?;
+                        let issued = self.issue(&api, &id, &pubkey, &lim, secrets)?;
+                        cache.put(&id, issued.clone());
+                        issued
+                    }
+                }
+            };
+            secrets.push(issued.certificate.clone());
+            let cert = Certificate::from_openssh(&issued.certificate).map_err(|_| Out::Fail("unavailable: the hosting API sent a certificate that could not be read".into()))?;
+            let target = Target { host: issued.host.clone(), port: issued.port, user: issued.user.clone(), reported: issued.host_key_fingerprint.clone(), pinned: self.store.kv_get(&pin_key) };
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| Out::Fail("unavailable: the SSH client could not start".into()))?;
+            match rt.block_on(connect_and_run(&target, key.clone(), cert, &req.command, command_timeout, &lim)) {
+                Ok((out, new_pin)) => {
+                    if let Some(fp) = new_pin {
+                        // First use: the pin is kept for this server from now on (a failed save only means we pin again next time).
+                        let _ = self.store.kv_set(&pin_key, &fp);
+                    }
+                    return Ok(json!({
+                        "server": name, "exitCode": out.exit_code, "stdout": out.stdout, "stderr": out.stderr,
+                        "truncated": out.truncated, "timedOut": out.timed_out,
+                    }));
+                }
+                Err(Out::Fail(e)) => {
+                    // One line per connect or auth failure: where, and why (the cause text holds no secret).
+                    self.store.log(&format!("ssh {}:{} failed: {e}", target.host, target.port));
+                    if e.starts_with("auth_failed:") && !fresh {
+                        // The cached certificate may be stale (a rotated CA, a rebuilt server): forget it, ask once more.
+                        fresh = true;
+                        self.cache.lock().unwrap().forget(&id);
+                        continue;
+                    }
+                    return Err(Out::Fail(e));
+                }
+                Err(other) => return Err(other),
+            }
         }
-        Ok(json!({
-            "server": name, "exitCode": out.exit_code, "stdout": out.stdout, "stderr": out.stderr,
-            "truncated": out.truncated, "timedOut": out.timed_out,
-        }))
     }
 
     /// Who is signed in (the account's email); a stable word when the hub does not say.
@@ -188,7 +211,11 @@ impl<N: Net, S: Store> SshExec<N, S> {
         match self.store.secret_get(SECRET_FIELD).map_err(|_| Out::Fail("unavailable: the plugin secret store did not answer".into()))? {
             Some(pem) if !pem.trim().is_empty() => {
                 secrets.push(pem.trim().to_string());
-                PrivateKey::from_openssh(pem.trim()).map_err(|_| unreadable())
+                match PrivateKey::from_openssh(pem.trim()) {
+                    Ok(k) => Ok(k),
+                    // The Kotlin app kept a base64 32-byte Ed25519 seed in this field: rebuild the same key from it.
+                    Err(_) => legacy_seed(pem.trim()).map(|seed| PrivateKey::from(Ed25519Keypair::from_seed(&seed))).ok_or_else(unreadable),
+                }
             }
             _ => {
                 let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).map_err(|_| Out::Fail("unavailable: an SSH device key could not be made".into()))?;
@@ -208,7 +235,7 @@ impl<N: Net, S: Store> SshExec<N, S> {
         loop {
             let token = self.sites.token().map_err(|v| state_fail::<()>(&v).unwrap_err())?;
             secrets.push(token.clone());
-            let (status, reply) = self.sites.net().post(&url, &token, &body).map_err(|_| Out::Fail("unavailable: Hosting could not be reached. Try again in a moment.".into()))?;
+            let (status, reply, retry_after) = self.sites.net().post_ra(&url, &token, &body).map_err(|_| Out::Fail("unavailable: Hosting could not be reached. Try again in a moment.".into()))?;
             let code = code_of(&reply);
             return match status {
                 200 => parse_issued(&reply).map_err(Out::Fail),
@@ -218,12 +245,18 @@ impl<N: Net, S: Store> SshExec<N, S> {
                     continue;
                 }
                 401 => fail("signed_out", "Your Infantry AI account session ended. Sign in again."),
+                400 => fail("bad_request", "the hosting service refused this PC's SSH key"),
+                429 => fail("unavailable", &match retry_after {
+                    Some(s) => format!("slow down: too many requests, try again in {s} s"),
+                    None => "slow down: too many requests, try again later".to_string(),
+                }),
+                502 => fail("unavailable", "The hosting provider had a problem. Try again in a minute."),
                 403 if code.contains("email") => fail("email_unverified", &message_of(&reply, "Verify your email to use hosting.")),
-                403 => fail("not_entitled", &message_of(&reply, "Your plan does not include hosting.")),
+                403 => fail("not_entitled", &message_of(&reply, "Your account may not open SSH to servers (permission hosting.servers.ssh).")),
                 404 => fail("not_found", &message_of(&reply, "That server no longer exists.")),
                 409 if code == "server_setting_up" => Err(Out::Done(json!({
                     "status": "setting_up",
-                    "retryAfterSec": reply.get("retryAfterSec").and_then(Value::as_u64).unwrap_or(lim.retry_sec),
+                    "retryAfterSec": reply.get("retryAfterSec").and_then(Value::as_u64).or(retry_after).unwrap_or(lim.retry_sec),
                     "message": message_of(&reply, "The server is still being set up. Try again shortly."),
                 }))),
                 409 if code == "not_running" => fail("not_running", &message_of(&reply, "The server is not running. Start it first.")),
@@ -235,20 +268,57 @@ impl<N: Net, S: Store> SshExec<N, S> {
     }
 }
 
-/// The server the call means: by id or name, or the only one.
+/// The server the call means: by id (any case) or name, or the only one. Two servers of one name must be told apart by id.
 fn pick_server(servers: &[Value], wanted: Option<&str>) -> Result<Value, Out> {
     let names = || if servers.is_empty() { "none".to_string() } else { servers.iter().filter_map(|s| text(s, "name")).collect::<Vec<_>>().join(", ") };
     match wanted {
-        Some(w) => match servers.iter().find(|s| text(s, "id") == Some(w)).or_else(|| servers.iter().find(|s| text(s, "name").is_some_and(|n| n.eq_ignore_ascii_case(w)))) {
-            Some(s) => Ok(s.clone()),
-            None => fail("not_found", &format!("no server is named '{w}'. Your servers: {}", names())),
-        },
+        Some(w) => {
+            if let Some(s) = servers.iter().find(|s| text(s, "id").is_some_and(|i| i.eq_ignore_ascii_case(w))) {
+                return Ok(s.clone());
+            }
+            let by_name: Vec<&Value> = servers.iter().filter(|s| text(s, "name").is_some_and(|n| n.eq_ignore_ascii_case(w))).collect();
+            match by_name.as_slice() {
+                [one] => Ok((*one).clone()),
+                [] => fail("not_found", &format!("no server is named '{w}'. Your servers: {}", names())),
+                many => fail("bad_request", &format!("{} servers are named '{w}'; pass its id", many.len())),
+            }
+        }
         None => match servers {
             [] => fail("not_found", "you have no hosting servers yet"),
             [one] => Ok(one.clone()),
             _ => fail("bad_request", &format!("you have {} servers; name one in 'server'. Your servers: {}", servers.len(), names())),
         },
     }
+}
+
+/// A timeoutSec of 0 or less (or none) is the default; a call can never exceed the maximum.
+fn command_timeout(asked: Option<u64>, lim: &Limits) -> Duration {
+    asked.filter(|t| *t > 0).map(Duration::from_secs).unwrap_or(lim.command).min(lim.command_max)
+}
+
+/// The legacy (Kotlin) device key: a base64 32-byte Ed25519 seed. None when the text is anything else.
+fn legacy_seed(text: &str) -> Option<[u8; 32]> {
+    let mut bits = 0u32;
+    let mut n = 0u32;
+    let mut out = Vec::with_capacity(32);
+    for c in text.trim().trim_end_matches('=').bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        };
+        bits = (bits << 6) | v as u32;
+        n += 6;
+        if n >= 8 {
+            n -= 8;
+            out.push((bits >> n) as u8);
+            bits &= (1 << n) - 1;
+        }
+    }
+    <[u8; 32]>::try_from(out).ok()
 }
 
 struct Target {
@@ -272,6 +342,8 @@ struct Client {
     reported: Option<String>,
     pinned: Option<String>,
     seen: Arc<Mutex<Option<Verdict>>>,
+    /// The fingerprint the server showed (public data), for the refusal text.
+    shown: Arc<Mutex<Option<String>>>,
 }
 
 impl client::Handler for Client {
@@ -280,6 +352,7 @@ impl client::Handler for Client {
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
         let PublicKeyOrCertificate::PublicKey { key, .. } = key else { return Ok(false) };
         let v = hostkey::judge(self.reported.as_deref(), self.pinned.as_deref(), &key.fingerprint(HashAlg::Sha256).to_string());
+        *self.shown.lock().unwrap() = Some(key.fingerprint(HashAlg::Sha256).to_string());
         let ok = !matches!(v, Verdict::Mismatch);
         *self.seen.lock().unwrap() = Some(v);
         Ok(ok)
@@ -296,7 +369,8 @@ fn push_capped(buf: &mut Vec<u8>, data: &[u8], cap: usize, truncated: &mut bool)
 
 async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, command: &str, command_timeout: Duration, lim: &Limits) -> Result<(Output, Option<String>), Out> {
     let seen = Arc::new(Mutex::new(None));
-    let handler = Client { reported: t.reported.clone(), pinned: t.pinned.clone(), seen: seen.clone() };
+    let shown = Arc::new(Mutex::new(None));
+    let handler = Client { reported: t.reported.clone(), pinned: t.pinned.clone(), seen: seen.clone(), shown: shown.clone() };
     // ED25519 host keys first.
     let mut keys = russh::Preferred::default().key.to_vec();
     keys.sort_by_key(|a| *a != Algorithm::Ed25519);
@@ -311,7 +385,9 @@ async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, co
     let (handle, auth) = match tokio::time::timeout(lim.connect, login).await {
         Err(_) => return fail("unavailable", "the server did not answer in time"),
         Ok(Err(_)) if mismatch() => {
-            return fail("host_key_mismatch", "the server's SSH host key is not the one expected for it; nothing was sent. If the server was rebuilt, this is expected: remove it and create it again.")
+            let presented = shown.lock().unwrap().clone().unwrap_or_else(|| "unknown".into());
+            let expected = t.reported.clone().or_else(|| t.pinned.clone()).unwrap_or_else(|| "unknown".into());
+            return fail("host_key_mismatch", &format!("the server's SSH host key ({presented}) is not the one expected for it ({expected}); nothing was sent. If the server was rebuilt, this is expected: remove it and create it again."))
         }
         Ok(Err(e)) => return fail("unavailable", &format!("the SSH connection failed ({})", short(&e))),
         Ok(Ok(x)) => x,
