@@ -566,13 +566,29 @@ fn b64(bytes: &[u8]) -> String {
     out
 }
 
+/// The default of a setting key, looked up in every `daemon.config` group (never by position).
+fn manifest_default(manifest: &Value, key: &str) -> Option<u64> {
+    manifest["daemon"]["config"].as_array()?.iter().filter_map(|g| g["fields"].as_array()).flatten().find(|f| f["key"] == key)?["default"].as_u64()
+}
+
+#[test]
+fn b4_b5_b6_a_reordered_manifest_still_finds_the_defaults() {
+    let mut m: Value = serde_json::from_str(include_str!("../module.json")).unwrap();
+    let before = (manifest_default(&m, K_COMMAND_SEC), manifest_default(&m, K_COMMAND_MAX_SEC), manifest_default(&m, K_CERT_MARGIN_SEC));
+    assert_eq!(before, (Some(120), Some(1800), Some(300)));
+    m["daemon"]["config"].as_array_mut().unwrap().reverse();
+    for g in m["daemon"]["config"].as_array_mut().unwrap() {
+        if let Some(f) = g["fields"].as_array_mut() { f.reverse(); }
+    }
+    assert_eq!((manifest_default(&m, K_COMMAND_SEC), manifest_default(&m, K_COMMAND_MAX_SEC), manifest_default(&m, K_CERT_MARGIN_SEC)), before);
+}
+
 #[test]
 fn b4_b5_b6_the_live_defaults_are_120_1800_and_300_seconds_in_code_and_in_the_manifest() {
     let lim = Limits::load(&&FakeStore::default());
     assert_eq!((lim.command, lim.command_max, lim.cert_margin_ms), (Duration::from_secs(120), Duration::from_secs(1800), 300_000));
     let manifest: Value = serde_json::from_str(include_str!("../module.json")).unwrap();
-    let fields = manifest["daemon"]["config"][0]["fields"].as_array().unwrap();
-    let default_of = |key: &str| fields.iter().find(|f| f["key"] == key).unwrap()["default"].as_u64().unwrap();
+    let default_of = |key: &str| manifest_default(&manifest, key).unwrap_or_else(|| panic!("no default for {key} in any daemon.config group"));
     assert_eq!((default_of(K_COMMAND_SEC), default_of(K_COMMAND_MAX_SEC), default_of(K_CERT_MARGIN_SEC)), (120, 1800, 300));
     // The setting keys are the ones that were already there.
     assert_eq!((K_COMMAND_SEC, K_COMMAND_MAX_SEC, K_CERT_MARGIN_SEC), ("limits.sites.ssh.commandTimeoutSec", "limits.sites.ssh.maxCommandTimeoutSec", "limits.sites.ssh.certMarginSec"));
