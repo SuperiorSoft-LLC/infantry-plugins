@@ -57,13 +57,6 @@ impl Net for HostNet {
 /// The plugin secret, plugin storage, settings and clock of the real host.
 struct HostStore;
 
-impl HostStore {
-    /// The keystore name of this plugin's secret (`plugin.<module id, lowercase>`; the daemon pins reads to it).
-    fn secret_name() -> String {
-        format!("plugin.{}", host::config::module_id().to_lowercase())
-    }
-}
-
 impl Store for HostStore {
     fn secret_get(&self, field: &str) -> Result<Option<String>, String> {
         let r = host::frames::request("plugin_secret_get", &serde_json::json!({ "field": field }).to_string(), None, 10_000)?;
@@ -71,7 +64,7 @@ impl Store for HostStore {
         Ok(v.get("value").and_then(Value::as_str).map(String::from))
     }
     fn secret_set(&self, field: &str, value: &str) -> Result<(), String> {
-        host::frames::request("secret_field_set", &serde_json::json!({ "name": Self::secret_name(), "field": field, "value": value }).to_string(), None, 10_000).map(|_| ())
+        host::frames::request("plugin_secret_set", &serde_json::json!({ "field": field, "value": value }).to_string(), None, 10_000).map(|_| ())
     }
     fn kv_get(&self, key: &str) -> Option<String> {
         host::storage::kv_get(key).ok().flatten()
