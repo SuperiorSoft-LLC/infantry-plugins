@@ -36,12 +36,14 @@
         "name": "infantry_sites_ssh_exec",
         "action": "sites.servers.ssh",
         "kind": "write",
+        "timeoutMs": 1860000,
         "description": "Run a shell command on one of your hosting servers over SSH (args: server?, command, timeoutSec?)."
       },
       {
         "name": "infantry_sites_ssh_upload",
         "action": "sites.servers.ssh",
         "kind": "write",
+        "timeoutMs": 1860000,
         "description": "Write a small text file on one of your hosting servers over SSH (args: server?, path, content)."
       }
     ],
@@ -55,12 +57,14 @@
         "type": "sites_ssh_exec",
         "action": "sites.servers.ssh",
         "kind": "write",
+        "timeoutMs": 1860000,
         "description": "{server?, command, timeoutSec?} -> sites_ssh_exec {server, exitCode?, stdout, stderr, truncated?, timedOut?} (owner only)"
       },
       {
         "type": "sites_ssh_upload",
         "action": "sites.servers.ssh",
         "kind": "write",
+        "timeoutMs": 1860000,
         "description": "{server?, path, content} -> sites_ssh_upload {server, exitCode?, stdout, stderr} (owner only)"
       }
     ],
