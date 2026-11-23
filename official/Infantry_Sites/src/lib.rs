@@ -120,6 +120,11 @@ fn certs() -> SharedCache {
     CACHE.get_or_init(|| Arc::new(Mutex::new(cert::CertCache::default()))).clone()
 }
 
+fn ssh_upload(args: &str) -> Result<String, String> {
+    let req = ssh::parse_upload(args)?;
+    SshExec::new(HostNet, HostStore, certs()).exec(req).map(|v| v.to_string())
+}
+
 fn ssh_exec(args: &str) -> Result<String, String> {
     let req = ssh::parse_request(args)?;
     SshExec::new(HostNet, HostStore, certs()).exec(req).map(|v| v.to_string())
@@ -134,7 +139,8 @@ impl Plugin for SitesPlugin {
             // The owner and an agent session may run commands on the owner's servers; nobody else.
             "infantry_sites_ssh_exec" if !(ctx.caller.owner || ctx.caller.agent) => Err("not_allowed: only the owner or an agent session may run commands on a hosting server".into()),
             "infantry_sites_ssh_exec" => ssh_exec(&args),
-            "infantry_sites_ssh_upload" => Err("unavailable: uploading a file over SSH is not in this build yet (SVC-7)".into()),
+            "infantry_sites_ssh_upload" if !(ctx.caller.owner || ctx.caller.agent) => Err("not_allowed: only the owner or an agent session may write files on a hosting server".into()),
+            "infantry_sites_ssh_upload" => ssh_upload(&args),
             other => Err(format!("unknown tool {other}")),
         }
     }
@@ -144,7 +150,8 @@ impl Plugin for SitesPlugin {
             "sites_list" => Ok(Some(Frame { type_: "sites_list".into(), data: Sites::new(HostNet).list().to_string(), session_id: frame.session_id, request_id: frame.request_id })),
             "sites_ssh_exec" if !caller.owner => Err("not_allowed: only the owner may run commands on a hosting server from the app".into()),
             "sites_ssh_exec" => ssh_exec(&frame.data).map(|data| Some(Frame { type_: "sites_ssh_exec".into(), data, session_id: frame.session_id, request_id: frame.request_id })),
-            "sites_ssh_upload" => Err("unavailable: uploading a file over SSH is not in this build yet (SVC-7)".into()),
+            "sites_ssh_upload" if !caller.owner => Err("not_allowed: only the owner may write files on a hosting server from the app".into()),
+            "sites_ssh_upload" => ssh_upload(&frame.data).map(|data| Some(Frame { type_: "sites_ssh_upload".into(), data, session_id: frame.session_id, request_id: frame.request_id })),
             other => Err(format!("this plugin does not answer {other}")),
         }
     }

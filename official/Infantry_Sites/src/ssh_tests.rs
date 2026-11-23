@@ -23,12 +23,27 @@ fn real_now_ms() -> u64 {
 struct Seen {
     commands: Mutex<Vec<String>>,
     auth_attempts: AtomicUsize,
+    /// The server's disk: path -> bytes (written by the upload command, read by `cat 'p'`).
+    files: Mutex<HashMap<String, Vec<u8>>>,
 }
 
 #[derive(Clone)]
 struct Handler {
     ca: Fingerprint,
     seen: Arc<Seen>,
+    /// Uploads waiting for end-of-input: channel -> (path, bytes so far).
+    pending: HashMap<ChannelId, (String, Vec<u8>)>,
+}
+
+/// The path of `mkdir -p "$(dirname -- 'p')" && cat > 'p'`, un-quoted the way a POSIX shell would.
+fn upload_path(cmd: &str) -> Option<String> {
+    let q = cmd.strip_prefix("mkdir -p \"$(dirname -- ")?;
+    let (a, b) = q.split_once(")\" && cat > ")?;
+    if a != b {
+        return None;
+    }
+    let inner = b.strip_prefix('\'')?.strip_suffix('\'')?;
+    Some(inner.replace("'\\''", "'"))
 }
 
 impl server::Server for Handler {
@@ -51,10 +66,43 @@ impl server::Handler for Handler {
         let ok = cert.validate_at(now, &[self.ca]).is_ok() && cert.valid_principals().iter().any(|p| p == user);
         Ok(if ok { Auth::Accept } else { Auth::reject() })
     }
+    async fn data(&mut self, ch: ChannelId, data: &[u8], _s: &mut Session) -> Result<(), Self::Error> {
+        if let Some((_, buf)) = self.pending.get_mut(&ch) {
+            buf.extend_from_slice(data);
+        }
+        Ok(())
+    }
+    async fn channel_eof(&mut self, ch: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        if let Some((path, buf)) = self.pending.remove(&ch) {
+            self.seen.files.lock().unwrap().insert(path, buf);
+            session.exit_status_request(ch, 0)?;
+            session.eof(ch)?;
+            session.close(ch)?;
+        }
+        Ok(())
+    }
     async fn exec_request(&mut self, ch: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
         let cmd = String::from_utf8_lossy(data).to_string();
         self.seen.commands.lock().unwrap().push(cmd.clone());
         session.channel_success(ch)?;
+        if let Some(path) = upload_path(&cmd) {
+            self.pending.insert(ch, (path, Vec::new()));
+            return Ok(());
+        }
+        if let Some(q) = cmd.strip_prefix("cat '") {
+            let path = q.strip_suffix('\'').unwrap_or(q).replace("'\\''", "'");
+            let found = self.seen.files.lock().unwrap().get(&path).cloned();
+            match found {
+                Some(b) => {
+                    session.data(ch, b)?;
+                    session.exit_status_request(ch, 0)?;
+                }
+                None => session.exit_status_request(ch, 1)?,
+            }
+            session.eof(ch)?;
+            session.close(ch)?;
+            return Ok(());
+        }
         match cmd.as_str() {
             "hello" => {
                 session.data(ch, b"out\n".to_vec())?;
@@ -82,9 +130,9 @@ struct TestServer {
 
 /// Starts the server on port 0 in its own thread; it trusts `ca` and shows `host_key`.
 fn start_server(ca: &PrivateKey, host_key: PrivateKey) -> TestServer {
-    let seen = Arc::new(Seen { commands: Mutex::new(vec![]), auth_attempts: AtomicUsize::new(0) });
+    let seen = Arc::new(Seen { commands: Mutex::new(vec![]), auth_attempts: AtomicUsize::new(0), files: Mutex::new(HashMap::new()) });
     let host_fp = host_key.public_key().fingerprint(HashAlg::Sha256).to_string();
-    let handler = Handler { ca: ca.public_key().fingerprint(HashAlg::Sha256), seen: seen.clone() };
+    let handler = Handler { ca: ca.public_key().fingerprint(HashAlg::Sha256), seen: seen.clone(), pending: HashMap::new() };
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
@@ -246,10 +294,10 @@ impl Store for &FakeStore {
 }
 
 fn req(cmd: &str) -> Request {
-    Request { server: None, command: cmd.into(), timeout_sec: None }
+    Request { server: None, command: cmd.into(), timeout_sec: None, stdin: None }
 }
 fn named(server: &str, cmd: &str) -> Request {
-    Request { server: Some(server.into()), command: cmd.into(), timeout_sec: None }
+    Request { server: Some(server.into()), command: cmd.into(), timeout_sec: None, stdin: None }
 }
 fn exec(net: &FakeNet, store: &FakeStore, cache: &SharedCache, r: Request) -> Result<Value, String> {
     SshExec::new(net, store, cache.clone()).exec(r)
@@ -358,7 +406,7 @@ fn output_is_capped_by_the_setting_and_flagged() {
 fn a_command_that_runs_too_long_times_out_and_says_so() {
     let (_srv, net) = world(true);
     let t = std::time::Instant::now();
-    let v = exec(&net, &FakeStore::default(), &cache(), Request { server: None, command: "hang".into(), timeout_sec: Some(1) }).unwrap();
+    let v = exec(&net, &FakeStore::default(), &cache(), Request { server: None, command: "hang".into(), timeout_sec: Some(1), stdin: None }).unwrap();
     assert_eq!(v["timedOut"], true);
     assert!(v["exitCode"].is_null());
     assert!(t.elapsed() < Duration::from_secs(10));
@@ -372,7 +420,7 @@ fn the_command_timeout_comes_from_the_setting_and_a_call_cannot_exceed_the_maxim
     let v = exec(&net, &store, &cache(), req("hang")).unwrap();
     assert_eq!(v["timedOut"], true, "the setting's value applied");
     store.settings.borrow_mut().insert(K_COMMAND_MAX_SEC.into(), "1".into());
-    let v = exec(&net, &store, &cache(), Request { server: None, command: "hang".into(), timeout_sec: Some(3600) }).unwrap();
+    let v = exec(&net, &store, &cache(), Request { server: None, command: "hang".into(), timeout_sec: Some(3600), stdin: None }).unwrap();
     assert_eq!(v["timedOut"], true, "an hour was cut to the 1 s maximum");
 }
 
@@ -656,3 +704,75 @@ fn b20_a_connect_or_auth_failure_writes_one_log_line_with_host_port_and_no_secre
     assert!(logs[0].contains(&format!("127.0.0.1:{}", net.port)), "{logs:?}");
 }
 
+
+// ---- upload (SVC-7) -------------------------------------------------------------------------------------------
+
+fn up(path: &str, content: &str) -> Request {
+    parse_upload(&json!({"path": path, "content": content}).to_string()).unwrap()
+}
+fn disk(srv: &TestServer, path: &str) -> Option<Vec<u8>> {
+    srv.seen.files.lock().unwrap().get(path).cloned()
+}
+
+#[test]
+fn an_upload_writes_reads_back_and_replaces_the_file() {
+    let (srv, net) = world(true);
+    let (store, c) = (FakeStore::default(), cache());
+    let v = exec(&net, &store, &c, up("/srv/app/a.txt", "one
+line é")).unwrap();
+    assert_eq!(v["exitCode"].as_u64(), Some(0));
+    assert_eq!(disk(&srv, "/srv/app/a.txt").unwrap(), "one
+line é".as_bytes());
+    let back = exec(&net, &store, &c, req("cat '/srv/app/a.txt'")).unwrap();
+    assert_eq!(back["stdout"].as_str(), Some("one
+line é"));
+    exec(&net, &store, &c, up("/srv/app/a.txt", "two")).unwrap();
+    assert_eq!(disk(&srv, "/srv/app/a.txt").unwrap(), b"two");
+    assert_eq!(srv.seen.commands.lock().unwrap()[0], "mkdir -p \"$(dirname -- '/srv/app/a.txt')\" && cat > '/srv/app/a.txt'");
+}
+
+#[test]
+fn an_empty_file_is_written() {
+    let (srv, net) = world(true);
+    exec(&net, &FakeStore::default(), &cache(), up("/e", "")).unwrap();
+    assert_eq!(disk(&srv, "/e").unwrap(), Vec::<u8>::new());
+}
+
+#[test]
+fn an_oversized_upload_is_refused_naming_the_setting_and_nothing_is_sent() {
+    let (srv, net) = world(true);
+    let store = FakeStore::default();
+    store.settings.borrow_mut().insert(K_MAX_UPLOAD_BYTES.into(), "10".into());
+    let e = exec(&net, &store, &cache(), up("/big", "01234567890")).unwrap_err();
+    assert!(e.starts_with("bad_request:") && e.contains("limits.sites.ssh.maxUploadBytes") && e.contains("11 bytes"), "{e}");
+    assert!(srv.seen.commands.lock().unwrap().is_empty());
+    exec(&net, &store, &cache(), up("/ok", "0123456789")).unwrap();
+    // The default is 1 MiB.
+    let e = exec(&net, &FakeStore::default(), &cache(), up("/big", &"x".repeat(1_048_577))).unwrap_err();
+    assert!(e.contains("1048576"), "{e}");
+}
+
+#[test]
+fn a_path_with_a_quote_and_a_space_is_quoted_so_the_shell_sees_one_word() {
+    assert_eq!(shell_quote("a'b"), r"'a'\''b'");
+    let (srv, net) = world(true);
+    let path = "/srv/my dir/it's $HOME;rm -rf x.txt";
+    exec(&net, &FakeStore::default(), &cache(), up(path, "ok")).unwrap();
+    assert_eq!(disk(&srv, path).unwrap(), b"ok");
+}
+
+#[test]
+fn an_upload_needs_a_path_and_content() {
+    assert!(parse_upload("{\"content\":\"x\"}").unwrap_err().starts_with("bad_request:"));
+    assert!(parse_upload("{\"path\":\"  \",\"content\":\"x\"}").unwrap_err().starts_with("bad_request:"));
+    assert!(parse_upload("{\"path\":\"/a\"}").unwrap_err().starts_with("bad_request:"));
+}
+
+#[test]
+fn an_upload_answer_and_log_hold_no_key_certificate_or_token() {
+    let (_srv, net) = world(true);
+    let store = FakeStore::default();
+    let v = exec(&net, &store, &cache(), up("/s", "data")).unwrap();
+    let all = format!("{v} {:?}", store.logs.borrow());
+    assert!(!all.contains(TOKEN) && !all.contains("PRIVATE KEY") && !all.contains("-cert-v01"), "{all}");
+}

@@ -83,7 +83,7 @@
         "title": "SSH for agents",
         "tab": "Plugins",
         "order": 980,
-        "applies": "Applies to: the infantry_sites_ssh_exec tool and the Sites panel's SSH command.",
+        "applies": "Applies to: the infantry_sites_ssh_exec and infantry_sites_ssh_upload tools and the Sites panel SSH frames.",
         "keywords": [
           "ssh",
           "hosting",
@@ -158,6 +158,17 @@
             "step": 1,
             "scope": "daemon",
             "order": 6
+          },
+          {
+            "key": "limits.sites.ssh.maxUploadBytes",
+            "type": "number",
+            "label": "Largest file a call may upload to a server (bytes)",
+            "default": 1048576,
+            "min": 1,
+            "max": 104857600,
+            "step": 1,
+            "scope": "daemon",
+            "order": 7
           }
         ]
       }

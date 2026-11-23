@@ -25,12 +25,14 @@ pub const K_COMMAND_SEC: &str = "limits.sites.ssh.commandTimeoutSec";
 pub const K_COMMAND_MAX_SEC: &str = "limits.sites.ssh.maxCommandTimeoutSec";
 pub const K_CERT_MARGIN_SEC: &str = "limits.sites.ssh.certMarginSec";
 pub const K_RETRY_SEC: &str = "limits.sites.ssh.retryAfterSec";
+pub const K_MAX_UPLOAD_BYTES: &str = "limits.sites.ssh.maxUploadBytes";
 const DEFAULT_OUTPUT_BYTES: u64 = 65_536;
 const DEFAULT_CONNECT_SEC: u64 = 15;
 const DEFAULT_COMMAND_SEC: u64 = 120;
 const DEFAULT_COMMAND_MAX_SEC: u64 = 1800;
 const DEFAULT_CERT_MARGIN_SEC: u64 = 300;
 const DEFAULT_RETRY_SEC: u64 = 15;
+const DEFAULT_MAX_UPLOAD_BYTES: u64 = 1_048_576;
 
 /// What the SSH flow needs from the host besides the network: the plugin secret, plugin storage, settings, the clock.
 pub trait Store {
@@ -52,6 +54,7 @@ struct Limits {
     command_max: Duration,
     cert_margin_ms: u64,
     retry_sec: u64,
+    max_upload: usize,
 }
 
 impl Limits {
@@ -64,6 +67,7 @@ impl Limits {
             command_max: Duration::from_secs(n(K_COMMAND_MAX_SEC, DEFAULT_COMMAND_MAX_SEC).max(1)),
             cert_margin_ms: n(K_CERT_MARGIN_SEC, DEFAULT_CERT_MARGIN_SEC) * 1000,
             retry_sec: n(K_RETRY_SEC, DEFAULT_RETRY_SEC),
+            max_upload: n(K_MAX_UPLOAD_BYTES, DEFAULT_MAX_UPLOAD_BYTES) as usize,
         }
     }
 }
@@ -73,6 +77,27 @@ pub struct Request {
     pub server: Option<String>,
     pub command: String,
     pub timeout_sec: Option<u64>,
+    /// Bytes written to the command's stdin, then end-of-input (an upload).
+    pub stdin: Option<Vec<u8>>,
+}
+
+/// Kotlin `SitesSsh.shellQuote`: single quotes, an embedded quote becomes `'\''`.
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// `{server?, path, content}`: becomes a request that writes the file (the size limit is checked by the flow).
+pub fn parse_upload(args: &str) -> Result<Request, String> {
+    let v: Value = if args.trim().is_empty() { json!({}) } else { serde_json::from_str(args).map_err(|_| "bad_request: the arguments are not JSON".to_string())? };
+    let path = v.get("path").and_then(Value::as_str).filter(|p| !p.trim().is_empty()).ok_or("bad_request: path is required")?;
+    let content = v.get("content").and_then(Value::as_str).ok_or("bad_request: content is required")?;
+    let q = shell_quote(path);
+    Ok(Request {
+        server: v.get("server").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from),
+        command: format!("mkdir -p \"$(dirname -- {q})\" && cat > {q}"),
+        timeout_sec: None,
+        stdin: Some(content.as_bytes().to_vec()),
+    })
 }
 
 /// `{server?, command, timeoutSec?}`.
@@ -83,6 +108,7 @@ pub fn parse_request(args: &str) -> Result<Request, String> {
         server: v.get("server").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from),
         command,
         timeout_sec: v.get("timeoutSec").and_then(Value::as_u64),
+        stdin: None,
     })
 }
 
@@ -130,6 +156,11 @@ impl<N: Net, S: Store> SshExec<N, S> {
 
     fn run(&self, req: &Request, secrets: &mut Vec<String>) -> Result<Value, Out> {
         let lim = Limits::load(&self.store);
+        if let Some(b) = &req.stdin {
+            if b.len() > lim.max_upload {
+                return fail("bad_request", &format!("'content' is {} bytes; the limit is {} (setting {K_MAX_UPLOAD_BYTES})", b.len(), lim.max_upload));
+            }
+        }
         let Some(api) = self.sites.net().endpoint("api") else { return fail("not_configured", "This build names no hosting API endpoint.") };
         let listed = self.sites.list();
         if text(&listed, "state") != Some("ready") {
@@ -170,7 +201,7 @@ impl<N: Net, S: Store> SshExec<N, S> {
             let cert = Certificate::from_openssh(&issued.certificate).map_err(|_| Out::Fail("unavailable: the hosting API sent a certificate that could not be read".into()))?;
             let target = Target { host: issued.host.clone(), port: issued.port, user: issued.user.clone(), reported: issued.host_key_fingerprint.clone(), pinned: self.store.kv_get(&pin_key) };
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| Out::Fail("unavailable: the SSH client could not start".into()))?;
-            match rt.block_on(connect_and_run(&target, key.clone(), cert, &req.command, command_timeout, &lim)) {
+            match rt.block_on(connect_and_run(&target, key.clone(), cert, &req.command, req.stdin.as_deref(), command_timeout, &lim)) {
                 Ok((out, new_pin)) => {
                     if let Some(fp) = new_pin {
                         // First use: the pin is kept for this server from now on (a failed save only means we pin again next time).
@@ -367,7 +398,7 @@ fn push_capped(buf: &mut Vec<u8>, data: &[u8], cap: usize, truncated: &mut bool)
     buf.extend_from_slice(&data[..data.len().min(room)]);
 }
 
-async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, command: &str, command_timeout: Duration, lim: &Limits) -> Result<(Output, Option<String>), Out> {
+async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, command: &str, stdin: Option<&[u8]>, command_timeout: Duration, lim: &Limits) -> Result<(Output, Option<String>), Out> {
     let seen = Arc::new(Mutex::new(None));
     let shown = Arc::new(Mutex::new(None));
     let handler = Client { reported: t.reported.clone(), pinned: t.pinned.clone(), seen: seen.clone(), shown: shown.clone() };
@@ -405,6 +436,13 @@ async fn connect_and_run(t: &Target, key: Arc<PrivateKey>, cert: Certificate, co
     let mut ch = handle.channel_open_session().await.map_err(|e| Out::Fail(format!("unavailable: the SSH session could not open ({})", short(&e))))?;
     ch.exec(true, command.as_bytes().to_vec()).await.map_err(|e| Out::Fail(format!("unavailable: the command could not be sent ({})", short(&e))))?;
     let deadline = tokio::time::Instant::now() + command_timeout;
+    if let Some(b) = stdin {
+        match tokio::time::timeout_at(deadline, async { ch.data(b).await?; ch.eof().await }).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return fail("unavailable", &format!("the file could not be sent ({})", short(&e))),
+            Err(_) => return fail("unavailable", "the file could not be sent in time"),
+        }
+    }
     loop {
         match tokio::time::timeout_at(deadline, ch.wait()).await {
             Err(_) => {
