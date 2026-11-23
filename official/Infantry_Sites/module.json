@@ -74,7 +74,96 @@
         "dev": "http://127.0.0.1:18953",
         "staging": "http://localhost:5173"
       }
-    }
+    },
+    "ownerFrames": [
+      "secret_field_set"
+    ],
+    "config": [
+      {
+        "node": "Infantry_Sites.ssh",
+        "group": "Hosting",
+        "title": "SSH for agents",
+        "tab": "Plugins",
+        "order": 980,
+        "applies": "Applies to: the infantry_sites_ssh_exec tool and the Sites panel's SSH command.",
+        "keywords": [
+          "ssh",
+          "hosting",
+          "server",
+          "exec",
+          "timeout",
+          "output"
+        ],
+        "fields": [
+          {
+            "key": "limits.sites.ssh.outputBytes",
+            "type": "number",
+            "label": "Most output kept per stream (bytes; the rest is cut and the answer says truncated)",
+            "default": 65536,
+            "min": 1024,
+            "max": 10485760,
+            "step": 1,
+            "scope": "daemon",
+            "order": 1
+          },
+          {
+            "key": "limits.sites.ssh.connectTimeoutSec",
+            "type": "number",
+            "label": "Connect and sign-in timeout (seconds)",
+            "default": 15,
+            "min": 1,
+            "max": 300,
+            "step": 1,
+            "scope": "daemon",
+            "order": 2
+          },
+          {
+            "key": "limits.sites.ssh.commandTimeoutSec",
+            "type": "number",
+            "label": "Command timeout when the call names none (seconds)",
+            "default": 60,
+            "min": 1,
+            "max": 3600,
+            "step": 1,
+            "scope": "daemon",
+            "order": 3
+          },
+          {
+            "key": "limits.sites.ssh.maxCommandTimeoutSec",
+            "type": "number",
+            "label": "Longest command timeout a call may ask for (seconds)",
+            "default": 600,
+            "min": 1,
+            "max": 86400,
+            "step": 1,
+            "scope": "daemon",
+            "order": 4
+          },
+          {
+            "key": "limits.sites.ssh.certMarginSec",
+            "type": "number",
+            "label": "Ask for a new SSH certificate this long before the old one ends (seconds)",
+            "default": 60,
+            "min": 0,
+            "max": 3600,
+            "step": 1,
+            "scope": "daemon",
+            "order": 5
+          },
+          {
+            "key": "limits.sites.ssh.retryAfterSec",
+            "type": "number",
+            "label": "Retry hint when the server is still being set up and the API gives none (seconds)",
+            "default": 15,
+            "min": 1,
+            "max": 3600,
+            "step": 1,
+            "scope": "daemon",
+            "order": 6
+          }
+        ]
+      }
+    ]
   },
   "tabs": [
     {

@@ -15,27 +15,29 @@ pub trait Net {
     fn frame(&self, kind: &str, data: Value) -> Result<Value, String>;
     /// GET with a bearer token: (status, JSON body; Null when the body is not JSON).
     fn get(&self, url: &str, bearer: &str) -> Result<(u16, Value), String>;
+    /// POST a JSON body with a bearer token: (status, JSON body; Null when the body is not JSON).
+    fn post(&self, url: &str, bearer: &str, body: &Value) -> Result<(u16, Value), String>;
 }
 
 pub struct Sites<N: Net> {
     net: N,
 }
 
-fn state(s: &str, message: &str) -> Value {
+pub(crate) fn state(s: &str, message: &str) -> Value {
     json!({ "state": s, "message": message })
 }
 
-fn text<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
+pub(crate) fn text<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
 /// The error code a WebServices error body carries (`{error: "code"}`, `{error: {code}}` or `{code}`).
-fn code_of(v: &Value) -> String {
+pub(crate) fn code_of(v: &Value) -> String {
     let e = v.get("error");
     e.and_then(Value::as_str).or_else(|| e.and_then(|e| e.get("code")).and_then(Value::as_str)).or_else(|| text(v, "code")).unwrap_or("").to_ascii_lowercase()
 }
 
-fn message_of(v: &Value, fallback: &str) -> String {
+pub(crate) fn message_of(v: &Value, fallback: &str) -> String {
     let e = v.get("error");
     text(v, "message").or_else(|| e.and_then(|e| e.get("message")).and_then(Value::as_str)).unwrap_or(fallback).to_string()
 }
@@ -97,7 +99,13 @@ impl<N: Net> Sites<N> {
         }
     }
 
-    fn token(&self) -> Result<String, Value> {
+    /// The network, for the SSH flow that shares this plugin's token and error mapping.
+    pub(crate) fn net(&self) -> &N {
+        &self.net
+    }
+
+    /// The account token from the hub, or the failure state to answer with.
+    pub(crate) fn token(&self) -> Result<String, Value> {
         match self.net.frame("account_token", json!({ "provider": PROVIDER })) {
             Ok(v) => text(&v, "accessToken").map(String::from).ok_or_else(|| state("signed_out", "Sign in to Infantry AI Hosting.")),
             Err(e) => {
@@ -186,6 +194,9 @@ mod tests {
             assert_eq!(url, "https://api.test/hosting/v1/servers");
             assert_eq!(bearer, "tok");
             self.replies.borrow_mut().pop_front().expect("a reply")
+        }
+        fn post(&self, _url: &str, _bearer: &str, _body: &Value) -> Result<(u16, Value), String> {
+            unreachable!("the list tests never post")
         }
     }
     fn fake(replies: Vec<Result<(u16, Value), String>>) -> Fake {
