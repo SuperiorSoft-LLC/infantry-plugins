@@ -13,8 +13,10 @@ name = "infantry-sites"
 path = "src/main.rs"
 
 [dependencies]
-# Path dependency for now; at release it becomes a git dependency on SuperiorSoft-LLC/infantry (rust/crates/infantry-plugin-sdk).
-infantry-plugin-sdk = { path = "C:/Users/antho/agenthq-standalone/.worktrees/dp-merge/wt1-merge/rust/crates/infantry-plugin-sdk" }
+# SVC-8: a git dependency, so the build needs no checkout on this machine. The release workflow and `stage.sh` build it
+# as is; a developer who edits the SDK points it at a local checkout in a machine-local `.cargo/config.toml`
+# (`[patch."https://github.com/SuperiorSoft-LLC/infantry-ai.git"] infantry-plugin-sdk = { path = "..." }`), never here.
+infantry-plugin-sdk = { git = "https://github.com/SuperiorSoft-LLC/infantry-ai.git", branch = "feature-rust-port" }
 rand = { version = "0.10", features = ["thread_rng"] }
 russh = { version = "0.65.4", default-features = false, features = ["flate2", "ring", "rsa"] }
 serde_json = "1"
