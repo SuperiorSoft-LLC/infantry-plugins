@@ -1,0 +1,9 @@
+# Repo-wide cargo config for every native plugin helper built here (official/*, community/*). Cargo reads it from the
+# CURRENT directory and its parents, so a build run from a plugin folder (each stage.sh does `cd` there) finds it.
+#
+# A clean Windows has no VC++ runtime: link the CRT statically so a helper (infantry-sites.exe, ...) starts there. Without
+# this it imports VCRUNTIME140.dll and Windows stops it with STATUS_DLL_NOT_FOUND (BattalionOS Windows Sandbox run).
+# A helper is its own process and talks to the daemon over stdio, so no allocation crosses to another CRT.
+# Check a package: infantry-ai scripts/bos-crt-check.py <package.bosapp>.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
