@@ -2,9 +2,13 @@
 
 ## Submit
 
-Open a PR that adds `community/<Id>.json`. Start from the `catalog-entry` your plugin repo's Gradle `catalogEntry`
-task prints (it fills `versions`), then add `id`, `description`, `tags`, `license` and `repo` (`owner/name`).
-The shape is `schema/catalog-entry.schema.json`.
+Build your plugin as described in the Infantry AI wiki: Plugins, Create, Build and Publish
+(`docs/wiki/plugins/` in the infantry-ai repository). Release the built module folder (`module.json`, its
+`daemon.component` or sidecar, `ui/dist`) as an asset of a GitHub release of your repository.
+
+Then open a PR that adds `community/<Id>.json` with `id`, `description`, `tags`, `license`, `repo` (`owner/name`) and one
+`versions` entry (`version`, `url` under `https://github.com/<repo>/releases/`, `sha256`, `size`). The shape is
+`schema/catalog-entry.schema.json`.
 
 ## New version
 
