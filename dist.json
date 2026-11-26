@@ -1,0 +1,6 @@
+{
+  "_": "NEWS-PLUGIN-1: the modules CI builds and publishes to the `dist` branch (with catalog.json, the plugin-source catalog the Infantry AI daemon reads). Each listed module has a stage.sh. Infantry_Sites is not listed: it is a native sidecar shipped inside the app (bundled-external.json in infantry-ai). Add a module here, not in the workflow.",
+  "modules": [
+    { "name": "Infantry_News", "path": "official/Infantry_News" }
+  ]
+}

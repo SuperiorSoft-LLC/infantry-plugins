@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# NEWS-PLUGIN-1: builds every module listed in dist.json (wasm daemon half + web UI half) and publishes the built modules
+# and catalog.json to the `dist` branch. The Infantry AI daemon's Official plugin source reads
+# https://raw.githubusercontent.com/SuperiorSoft-LLC/infantry-plugins/dist/catalog.json and downloads each module's files.
+name: dist
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: dist
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: infantry-ai (plugin WIT, host for tests, the UI plugin build)
+        uses: actions/checkout@v4
+        with:
+          repository: SuperiorSoft-LLC/infantry-ai
+          ref: battalion-os
+          path: .infantry-ai
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+        working-directory: .infantry-ai/app
+      - name: test each module
+        run: |
+          for p in $(python3 -c 'import json; print(" ".join(m["path"] for m in json.load(open("dist.json"))["modules"]))'); do
+            (cd "$p" && cargo test)
+          done
+      - run: bash scripts/build-dist.sh dist-out --release
+      - name: publish to the dist branch
+        run: |
+          src="$(git rev-parse --short HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch origin dist; then git worktree add pub origin/dist && (cd pub && git checkout -B dist); else git worktree add --orphan -b dist pub; fi
+          find pub -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -r dist-out/. pub/
+          cd pub
+          git add -A
+          git diff --cached --quiet && { echo "no change"; exit 0; }
+          git commit -m "dist: built modules from main $src"
+          git push origin dist
