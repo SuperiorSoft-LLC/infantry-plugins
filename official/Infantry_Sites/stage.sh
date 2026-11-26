@@ -34,6 +34,12 @@ ep = m["daemon"]["endpoints"]
 if api: ep["api"].update({k: api for k in ep["api"] if k != "prod"})
 if site: ep["site"].update({k: site for k in ep["site"] if k != "prod"})
 a, s = ep["api"][env].rstrip("/"), ep["site"][env].rstrip("/")
+if env == "prod":
+    # SITES-ENV-2: a prod-baked daemon only ever reads the prod entry (build_env.rs), so a prod stage ships no dev/staging
+    # endpoint (the release's package check fails on any local URL).
+    for table in ep.values():
+        for k in [k for k in table if k != "prod"]:
+            del table[k]
 text = json.dumps(m, indent=2).replace("{api}", a).replace("{site}", s)
 open(dst, "w").write(text + "\n")
 PY
