@@ -6,7 +6,9 @@ The plugin catalog of Infantry AI. The app reads two files from GitHub Pages:
 - https://superiorsoft-llc.github.io/infantry-plugins/community.json (everyone else)
 
 They are the default sources of a fresh install (`infantry plugin sources`). Each plugin has one entry file
-`<Id>.json` in `official/` or `community/`; the catalogs are generated with `infantry plugin catalog build`.
+`<Id>.json` in `official/` or `community/`; the built catalog the Rust daemon reads (`catalog.json` on the `dist` branch,
+https://raw.githubusercontent.com/SuperiorSoft-LLC/infantry-plugins/dist/catalog.json) is made by `scripts/build-dist.sh`
+in the dist workflow (there is no `infantry plugin catalog build` command).
 See CONTRIBUTING.md. Start a plugin from https://github.com/SuperiorSoft-LLC/infantry-plugin-template.
 
 ## Trust and signing
