@@ -122,6 +122,9 @@ impl<N: Net> Sites<N> {
                     state("signed_out", "Sign in to Infantry AI Hosting.")
                 } else if l.contains("no account provider") || l.contains("consumer") {
                     state("not_configured", "Infantry AI Hosting is not set up on this install.")
+                } else if l.contains("could not be reached") {
+                    // The daemon's own reason ("Infantry AI Hosting could not be reached: ..."): the page shows it with Retry.
+                    state("unavailable", e.trim())
                 } else {
                     state("unavailable", "The account service did not answer. Try again in a moment.")
                 })
@@ -292,6 +295,14 @@ mod tests {
         f.token = Some(Err("no account provider 'infantry'".into()));
         assert_eq!(answer(&f)["state"], "not_configured");
     }
+    #[test]
+    fn an_unreachable_account_service_keeps_the_daemons_reason_not_signed_out() {
+        let mut f = fake(vec![]);
+        f.token = Some(Err("Infantry AI Hosting could not be reached: timed out".into()));
+        let v = answer(&f);
+        assert_eq!((v["state"].as_str(), v["message"].as_str()), (Some("unavailable"), Some("Infantry AI Hosting could not be reached: timed out")));
+    }
+
     #[test]
     fn unavailable_on_a_network_error_and_on_500() {
         assert_eq!(answer(&fake(vec![Err("connection refused".into())]))["state"], "unavailable");
