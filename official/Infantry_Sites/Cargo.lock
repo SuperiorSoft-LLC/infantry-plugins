@@ -770,8 +770,7 @@ dependencies = [
 
 [[package]]
 name = "infantry-plugin-sdk"
-version = "0.7.2"
-source = "git+https://github.com/SuperiorSoft-LLC/infantry-ai.git?branch=feature-rust-port#6899745d5c25d218bb488fc4bca7d333631f97b1"
+version = "0.5.1"
 dependencies = [
  "infantry-plugin-wit",
  "serde",
@@ -781,8 +780,7 @@ dependencies = [
 
 [[package]]
 name = "infantry-plugin-wit"
-version = "0.7.2"
-source = "git+https://github.com/SuperiorSoft-LLC/infantry-ai.git?branch=feature-rust-port#6899745d5c25d218bb488fc4bca7d333631f97b1"
+version = "0.5.1"
 dependencies = [
  "base64",
  "serde",
