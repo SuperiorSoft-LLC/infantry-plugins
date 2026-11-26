@@ -1,0 +1,22 @@
+{
+  "modules": [
+    {
+      "name": "Infantry_News",
+      "tier": "official",
+      "version": "1.1.0",
+      "base": "official/Infantry_News",
+      "files": [
+        "daemon.component",
+        "module.json",
+        "ui/dist/index.css",
+        "ui/dist/index.js"
+      ],
+      "sha256": {
+        "daemon.component": "ba9da9e992245a6a930cb2a32f4fdb8f35251923bbc1d7b0b81729fa25b8e91c",
+        "module.json": "f1184e4dfcaaab4c148be5298475c365d5c642f84b455a548d6c0d532e1912ee",
+        "ui/dist/index.css": "3a830091b7e4e6747735049f3d111effb54a8ab4a47f4ab408940a891eccada5",
+        "ui/dist/index.js": "2c4f0ea4ad90c6be8a9d35335f41abc328cde68372f24fdf429ee38fd5b78531"
+      }
+    }
+  ]
+}
